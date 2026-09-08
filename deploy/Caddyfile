@@ -1,0 +1,33 @@
+# TLS + reverse proxy for the standalone bot server (deploy/docker-compose.bot.yml).
+# Serves https://<APP_DOMAIN> — the Visual Builder Mini App and the /payment/*
+# callbacks — and proxies to the bot's aiohttp server on :8080.
+#
+# APP_DOMAIN and CADDY_EMAIL come from deploy/.env.bot (passed in as env by the
+# compose file). Point <APP_DOMAIN>'s DNS A record at THIS server's IP (proxied
+# through Cloudflare is fine — Caddy still gets a real Let's Encrypt cert).
+#
+# Do NOT add X-Frame-Options / a restrictive frame-ancestors CSP: Telegram Web
+# renders the Mini App inside an iframe on web.telegram.org.
+
+{
+	email {$CADDY_EMAIL}
+}
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy easymakebot-bot:8080
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/app-access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

@@ -1,0 +1,51 @@
+# Alternative to nginx for production: automatic Let's Encrypt TLS.
+# Use with:  docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#
+# Replace easymakebot.example with your real domain and email.
+# If Cloudflare is in front, set its SSL mode to "Full (strict)" — Caddy still
+# gets a real cert on the origin.
+
+{
+	email siavashfarivartanha@gmail.com
+}
+
+easymakebot.com, www.easymakebot.com {
+	root * /var/www/html
+	encode zstd gzip
+
+	php_fastcgi wordpress:9000 {
+		trusted_proxies private_ranges
+	}
+	file_server
+
+	# Security headers
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		-Server
+	}
+
+	# Never serve these
+	@forbidden {
+		path /xmlrpc.php
+		path /wp-config.php
+		path /.*
+		path /*.sql /*.bak /*.log
+		path /wp-content/uploads/*.php
+	}
+	respond @forbidden 403
+
+	# Redirect www -> apex
+	@www host www.easymakebot.example
+	redir @www https://easymakebot.example{uri} permanent
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

@@ -1,0 +1,21 @@
+# Keep the build context small and free of secrets / local state.
+.git
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.env
+.env.*
+!.env.example
+deploy/.env.bot
+webapp/node_modules
+webapp/dist
+graphify-out
+site
+web
+webapp-*.log
+*.log
+bot_restart_*.log
+cloudflared_tunnel.log
+website.txt
+None

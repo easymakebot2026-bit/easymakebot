@@ -1,0 +1,80 @@
+# Production nginx vhost (TLS on the origin). Copy to nginx/prod.conf, set
+# server_name, and mount a cert into ./certs/ (Cloudflare Origin Certificate or
+# Let's Encrypt). Behind Cloudflare, keep SSL mode = Full (strict).
+#
+# Includes the same security rules as nginx/default.conf plus HTTPS + real-IP.
+
+upstream php { server wordpress:9000; }
+
+# HTTP -> HTTPS
+server {
+    listen 80;
+    server_name easymakebot.example www.easymakebot.example staging.easymakebot.example;
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }   # if using certbot
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name easymakebot.example staging.easymakebot.example;
+
+    ssl_certificate     /etc/nginx/certs/fullchain.pem;
+    ssl_certificate_key /etc/nginx/certs/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    root /var/www/html;
+    index index.php;
+    client_max_body_size 64m;
+
+    fastcgi_hide_header X-Content-Type-Options;
+    fastcgi_hide_header X-Frame-Options;
+    fastcgi_hide_header Referrer-Policy;
+    fastcgi_hide_header Permissions-Policy;
+    fastcgi_hide_header Cross-Origin-Opener-Policy;
+    fastcgi_hide_header X-Powered-By;
+
+    add_header X-Content-Type-Options     "nosniff" always;
+    add_header X-Frame-Options            "SAMEORIGIN" always;
+    add_header Referrer-Policy            "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy         "geolocation=(), microphone=(), camera=()" always;
+    add_header Strict-Transport-Security  "max-age=31536000; includeSubDomains; preload" always;
+    add_header Cross-Origin-Opener-Policy "same-origin" always;
+
+    location ~ /\.                 { deny all; }
+    location = /wp-config.php       { deny all; }
+    location ~* /(?:readme|license|changelog|wp-config-sample)\.(?:txt|html|md)$ { deny all; }
+    location ~* \.(?:sql|bak|old|orig|save|swp|log)$ { deny all; }
+    location ~* ^/wp-content/uploads/.*\.(?:php[0-9]?|phtml|pht|pl|py|cgi|sh|lua|asp|jsp)$ { deny all; }
+    location = /xmlrpc.php { return 405; }
+
+    location = /wp-login.php {
+        limit_req zone=login burst=5 nodelay;
+        limit_req_status 429;
+        include /etc/nginx/fastcgi_params_wp;
+        fastcgi_pass php;
+    }
+
+    # Dynamic SEO files — before the static regex, or they 404.
+    location = /robots.txt { try_files $uri /index.php?$args; access_log off; }
+    location ~* ^/(?:wp-sitemap|sitemap)[^/]*\.(?:xml|xsl)$ { try_files $uri /index.php?$args; access_log off; }
+
+    location ~* \.(?:css|js|mjs|json|map|svg|ico|gif|jpe?g|png|webp|avif|woff2?|ttf|otf|eot|mp4|webm|pdf|txt|xml)$ {
+        expires 30d; add_header Cache-Control "public, max-age=2592000"; access_log off; try_files $uri =404;
+    }
+
+    location / { try_files $uri $uri/ /index.php?$args; }
+
+    location ~ \.php$ {
+        try_files $uri =404;
+        include /etc/nginx/fastcgi_params_wp;
+        fastcgi_pass php;
+        fastcgi_read_timeout 120s;
+    }
+
+    # www -> apex
+    if ($host = www.easymakebot.example) { return 301 https://easymakebot.example$request_uri; }
+}

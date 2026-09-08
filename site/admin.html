@@ -1,0 +1,1063 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>easymakebot Admin</title>
+<link rel="icon" href="assets/logo-256.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Vazirmatn:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --logo: url("assets/logo-256.png");
+    --bg: #eef4f8;
+    --surface: #ffffff;
+    --surface-2: #f3f8fb;
+    --surface-3: #e7f1f7;
+    --ink: #0d2230;
+    --ink-soft: #3d576a;
+    --muted: #6d8798;
+    --line: #d9e6ee;
+    --accent: #0f7fc4;
+    --accent-deep: #0a6aa8;
+    --accent-bright: #1e9fec;
+    --accent-ink: #ffffff;
+    --accent-wash: #e5f4fd;
+    --ok: #0f9d76;
+    --ok-wash: #e3f5ef;
+    --warn: #b9760a;
+    --warn-wash: #f9efdf;
+    --bad: #cf4444;
+    --bad-wash: #fbe9e9;
+    --idle: #77909f;
+    --idle-wash: #ecf1f4;
+    --radius: 13px;
+    --shadow-sm: 0 1px 2px rgba(27,19,48,.06), 0 4px 12px -6px rgba(27,19,48,.12);
+    --shadow-lg: 0 1px 2px rgba(27,19,48,.06), 0 26px 50px -18px rgba(27,19,48,.32);
+    --font-head: 'Sora', 'Vazirmatn', system-ui, sans-serif;
+    --font-body: 'IBM Plex Sans', 'Vazirmatn', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #081019;
+      --surface: #0f1e2a;
+      --surface-2: #0c1926;
+      --surface-3: #17293a;
+      --ink: #e8f2f8;
+      --ink-soft: #a9c1cf;
+      --muted: #7893a2;
+      --line: #20323f;
+      --accent: #4fbdf4;
+      --accent-deep: #8ad5f9;
+      --accent-bright: #2ba7ef;
+      --accent-ink: #04131d;
+      --accent-wash: #0e2635;
+      --ok: #34c99b;
+      --ok-wash: #10281f;
+      --warn: #e0a53a;
+      --warn-wash: #2b2110;
+      --bad: #ef6a6a;
+      --bad-wash: #2c1414;
+      --idle: #8fa6b3;
+      --idle-wash: #1a2831;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,.4), 0 4px 14px -8px rgba(0,0,0,.6);
+      --shadow-lg: 0 1px 2px rgba(0,0,0,.5), 0 30px 60px -20px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #081019;
+    --surface: #0f1e2a;
+    --surface-2: #0c1926;
+    --surface-3: #17293a;
+    --ink: #e8f2f8;
+    --ink-soft: #a9c1cf;
+    --muted: #7893a2;
+    --line: #20323f;
+    --accent: #4fbdf4;
+    --accent-deep: #8ad5f9;
+    --accent-bright: #2ba7ef;
+    --accent-ink: #04131d;
+    --accent-wash: #0e2635;
+    --ok: #34c99b;
+    --ok-wash: #10281f;
+    --warn: #e0a53a;
+    --warn-wash: #2b2110;
+    --bad: #ef6a6a;
+    --bad-wash: #2c1414;
+    --idle: #8fa6b3;
+    --idle-wash: #1a2831;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.4), 0 4px 14px -8px rgba(0,0,0,.6);
+    --shadow-lg: 0 1px 2px rgba(0,0,0,.5), 0 30px 60px -20px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  :root[data-lang="fa"] { --font-head: 'Vazirmatn', system-ui, sans-serif; --font-body: 'Vazirmatn', system-ui, sans-serif; }
+  [data-lang="fa"] .en { display: none !important; }
+  [data-lang="en"] .fa { display: none !important; }
+
+  h1, h2, h3 { font-family: var(--font-head); margin: 0; line-height: 1.2; font-weight: 600; text-wrap: balance; }
+  p { margin: 0; }
+  a { color: inherit; text-decoration: none; }
+  button { font-family: inherit; }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  :focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 2px; border-radius: 5px; }
+
+  /* ---------- logo ---------- */
+  .logo { width: 1em; height: 1em; display: inline-block; flex: none; background: var(--logo) center / contain no-repeat; border-radius: 50%; }
+
+  /* ---------- shell ---------- */
+  .shell { display: grid; grid-template-columns: 236px 1fr; min-height: 100vh; }
+  @media (max-width: 900px) { .shell { grid-template-columns: 1fr; } }
+
+  aside {
+    background: var(--surface);
+    border-inline-end: 1px solid var(--line);
+    padding: 20px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+  }
+  @media (max-width: 900px) {
+    aside { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 8px; }
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--font-head); font-weight: 700; font-size: 1.05rem;
+    padding: 6px 8px 16px;
+    letter-spacing: -0.01em;
+  }
+  @media (max-width: 900px) { .brand { padding: 0 8px 0 0; margin-inline-end: auto; } }
+  .brand .logo { font-size: 26px; color: var(--accent-bright); }
+  .brand .tag {
+    font-family: var(--font-body); font-weight: 600; font-size: 0.62rem;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+    border: 1px solid var(--line); padding: 2px 6px; border-radius: 6px;
+  }
+  :root[data-lang="fa"] .brand .tag { letter-spacing: 0; text-transform: none; font-size: 0.7rem; }
+
+  .nav-item {
+    display: flex; align-items: center; gap: 11px;
+    padding: 9px 11px; border-radius: 10px;
+    color: var(--ink-soft); font-weight: 500; font-size: 0.92rem;
+    border: none; background: none; width: 100%; cursor: pointer; text-align: start;
+    transition: background .14s, color .14s;
+  }
+  .nav-item .ico { width: 18px; height: 18px; flex: none; opacity: .8; }
+  .nav-item:hover { background: var(--surface-2); color: var(--ink); }
+  .nav-item.active { background: var(--accent-wash); color: var(--accent-deep); font-weight: 600; }
+  .nav-sep { flex: 1; }
+  @media (max-width: 900px) { .nav-sep { display: none; } .nav-item { width: auto; } }
+
+  .side-ctl { display: flex; gap: 8px; padding: 8px; }
+  .mini-btn {
+    flex: 1; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink-soft);
+    border-radius: 9px; padding: 7px; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    transition: border-color .14s, color .14s;
+  }
+  .mini-btn:hover { border-color: var(--accent-bright); color: var(--accent-deep); }
+
+  /* ---------- main ---------- */
+  main { padding: 0; min-width: 0; }
+  .topbar {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 20px clamp(16px, 4vw, 36px) 16px;
+    border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  .topbar h1 { font-size: 1.3rem; }
+  .topbar .sub { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
+  .topbar .grow { flex: 1; }
+
+  .search {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 8px 12px; min-width: 210px;
+  }
+  .search input { border: none; background: none; outline: none; color: var(--ink); font: inherit; width: 100%; }
+  .search input::placeholder { color: var(--muted); }
+  .search svg { width: 15px; height: 15px; color: var(--muted); flex: none; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    font-weight: 600; font-size: 0.88rem; padding: 9px 16px; border-radius: 10px;
+    cursor: pointer; border: 1px solid transparent; white-space: nowrap;
+    transition: transform .12s, box-shadow .16s, background .14s, border-color .14s;
+  }
+  .btn-primary { background: var(--accent); color: var(--accent-ink); box-shadow: var(--shadow-sm); }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: var(--shadow-lg); }
+  .btn-ghost { background: var(--surface); color: var(--ink); border-color: var(--line); }
+  .btn-ghost:hover { border-color: var(--accent-bright); color: var(--accent-deep); }
+  .btn-danger { background: var(--bad-wash); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 30%, transparent); }
+  .btn-danger:hover { background: var(--bad); color: #fff; }
+  .btn-sm { padding: 7px 12px; font-size: 0.82rem; border-radius: 8px; }
+
+  .view { padding: clamp(16px, 4vw, 36px); display: none; }
+  .view.active { display: block; }
+
+  /* ---------- KPI ---------- */
+  .kpi-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px 18px 16px; box-shadow: var(--shadow-sm);
+  }
+  .kpi .label { font-size: 0.78rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+  :root[data-lang="fa"] .kpi .label { letter-spacing: 0; text-transform: none; font-size: 0.85rem; }
+  .kpi .value { font-family: var(--font-head); font-weight: 700; font-size: 1.9rem; margin-top: 8px; letter-spacing: -0.01em; }
+  .kpi .value .unit { font-size: 0.9rem; font-weight: 600; color: var(--muted); margin-inline-start: 4px; }
+  .kpi .foot { font-size: 0.8rem; color: var(--ink-soft); margin-top: 6px; }
+
+  .kpi.wide { grid-column: span 2; }
+  @media (max-width: 560px) { .kpi.wide { grid-column: span 1; } }
+
+  .bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; margin-top: 12px; background: var(--surface-3); }
+  .bar span { display: block; }
+  .bar .s-live { background: var(--ok); }
+  .bar .s-expired { background: var(--warn); }
+  .bar .s-never { background: var(--idle); }
+  .bar .s-susp { background: var(--bad); }
+  .bar-legend { display: flex; flex-wrap: wrap; gap: 12px 16px; margin-top: 12px; font-size: 0.8rem; color: var(--ink-soft); }
+  .bar-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+
+  .section-title { font-size: 1.02rem; margin: 30px 0 14px; display: flex; align-items: center; gap: 10px; }
+  .section-title .count { font-size: 0.8rem; color: var(--muted); font-weight: 500; font-family: var(--font-body); }
+
+  .panels { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: hidden; }
+  .panel h3 { font-size: 0.9rem; padding: 14px 16px; border-bottom: 1px solid var(--line); color: var(--ink-soft); }
+  .panel ul { list-style: none; margin: 0; padding: 6px; }
+  .panel li { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 9px; font-size: 0.88rem; }
+  .panel li + li { border-top: 1px solid var(--line); }
+  .panel li .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .panel li .meta { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+  .panel li .amt { color: var(--ok); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* ---------- table ---------- */
+  .table-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-sm); overflow: hidden; }
+  .twrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  thead th {
+    text-align: start; font-weight: 600; font-size: 0.74rem; letter-spacing: 0.05em; text-transform: uppercase;
+    color: var(--muted); padding: 12px 14px; border-bottom: 1px solid var(--line); white-space: nowrap;
+  }
+  :root[data-lang="fa"] thead th { letter-spacing: 0; text-transform: none; font-size: 0.82rem; }
+  tbody td { padding: 12px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr { cursor: pointer; transition: background .12s; }
+  tbody tr:hover { background: var(--surface-2); }
+  td.num, th.num { text-align: end; font-variant-numeric: tabular-nums; }
+  .mono { font-family: var(--font-mono); font-size: 0.85em; color: var(--ink-soft); }
+  .name-cell { display: flex; align-items: center; gap: 9px; font-weight: 600; }
+  .name-cell .logo { font-size: 15px; color: var(--accent-bright); }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 0.75rem; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid transparent;
+  }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .pill.live { color: var(--ok); background: var(--ok-wash); }
+  .pill.expired { color: var(--warn); background: var(--warn-wash); }
+  .pill.never { color: var(--idle); background: var(--idle-wash); }
+  .pill.suspended { color: var(--bad); background: var(--bad-wash); }
+
+  .tfoot {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 14px; border-top: 1px solid var(--line); font-size: 0.83rem; color: var(--muted);
+  }
+  .pager { display: flex; gap: 6px; }
+  .pager button {
+    border: 1px solid var(--line); background: var(--surface); color: var(--ink-soft);
+    border-radius: 8px; padding: 5px 11px; cursor: pointer; font-weight: 600; font-size: 0.82rem;
+  }
+  .pager button:disabled { opacity: .4; cursor: default; }
+  .pager button:not(:disabled):hover { border-color: var(--accent-bright); color: var(--accent-deep); }
+
+  .empty { padding: 40px 16px; text-align: center; color: var(--muted); font-size: 0.9rem; }
+
+  /* ---------- drawer ---------- */
+  .scrim {
+    position: fixed; inset: 0; background: rgba(20,12,35,.5); backdrop-filter: blur(2px);
+    opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 40;
+  }
+  .scrim.show { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; inset-block: 0; inset-inline-end: 0; width: min(440px, 92vw);
+    background: var(--surface); border-inline-start: 1px solid var(--line);
+    box-shadow: var(--shadow-lg); z-index: 41;
+    transform: translateX(100%); transition: transform .24s ease;
+    display: flex; flex-direction: column; overflow-y: auto;
+  }
+  :root[dir="rtl"] .drawer { transform: translateX(-100%); }
+  .drawer.show { transform: none; }
+  .drawer-head { padding: 20px 20px 16px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--surface); }
+  .drawer-head .row { display: flex; align-items: flex-start; gap: 12px; }
+  .drawer-head h2 { font-size: 1.15rem; flex: 1; }
+  .x-btn { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink-soft); width: 30px; height: 30px; border-radius: 8px; cursor: pointer; font-size: 15px; flex: none; }
+  .x-btn:hover { border-color: var(--accent-bright); color: var(--accent-deep); }
+  .drawer-head .uname { color: var(--muted); font-family: var(--font-mono); font-size: 0.82rem; margin-top: 4px; }
+  .drawer-body { padding: 18px 20px; display: flex; flex-direction: column; gap: 20px; }
+  .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .stat-row .s { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 11px; }
+  .stat-row .s .k { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  :root[data-lang="fa"] .stat-row .s .k { text-transform: none; letter-spacing: 0; font-size: 0.8rem; }
+  .stat-row .s .v { font-family: var(--font-head); font-weight: 700; font-size: 1.1rem; margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+  .field { display: flex; flex-direction: column; gap: 7px; }
+  .field > .lbl { font-size: 0.8rem; font-weight: 600; color: var(--ink-soft); }
+  .grant-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .act-list { display: flex; flex-direction: column; gap: 9px; }
+  .act-list .btn { width: 100%; }
+
+  .kv { display: flex; justify-content: space-between; gap: 12px; font-size: 0.86rem; padding: 6px 0; border-bottom: 1px dashed var(--line); }
+  .kv .k { color: var(--muted); }
+  .kv .v { font-weight: 500; }
+
+  input[type=text], textarea {
+    width: 100%; border: 1px solid var(--line); background: var(--surface-2); color: var(--ink);
+    border-radius: 9px; padding: 10px 12px; font: inherit; outline: none; resize: vertical;
+  }
+  input[type=text]:focus, textarea:focus { border-color: var(--accent-bright); }
+
+  /* ---------- modal ---------- */
+  .modal-scrim {
+    position: fixed; inset: 0; background: rgba(20,12,35,.55); display: grid; place-items: center;
+    padding: 20px; z-index: 60; opacity: 0; pointer-events: none; transition: opacity .18s;
+  }
+  .modal-scrim.show { opacity: 1; pointer-events: auto; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 15px;
+    box-shadow: var(--shadow-lg); width: min(420px, 100%); padding: 22px; display: flex; flex-direction: column; gap: 14px;
+    transform: scale(.96); transition: transform .18s;
+  }
+  .modal-scrim.show .modal { transform: none; }
+  .modal h3 { font-size: 1.05rem; }
+  .modal p { font-size: 0.9rem; color: var(--ink-soft); }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
+  /* ---------- broadcast ---------- */
+  .bc-wrap { display: grid; gap: 18px; grid-template-columns: 1fr; max-width: 620px; }
+  .bc-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .bc-card .cc { font-size: 0.8rem; color: var(--muted); text-align: end; font-variant-numeric: tabular-nums; }
+  .note {
+    display: flex; gap: 9px; font-size: 0.83rem; color: var(--ink-soft);
+    background: var(--warn-wash); border: 1px solid color-mix(in srgb, var(--warn) 26%, transparent);
+    border-radius: 10px; padding: 11px 13px;
+  }
+  .note svg { width: 16px; height: 16px; color: var(--warn); flex: none; margin-top: 2px; }
+
+  /* ---------- toast ---------- */
+  #toast {
+    position: fixed; inset-block-end: 22px; inset-inline: 0; display: flex; justify-content: center;
+    pointer-events: none; z-index: 80;
+  }
+  #toast .t {
+    background: var(--ink); color: var(--bg); font-size: 0.86rem; font-weight: 500;
+    padding: 11px 18px; border-radius: 11px; box-shadow: var(--shadow-lg);
+    opacity: 0; transform: translateY(12px); transition: opacity .2s, transform .2s;
+    max-width: 90vw; text-align: center;
+  }
+  #toast .t.show { opacity: 1; transform: none; }
+
+  /* ---------- lock ---------- */
+  #lock {
+    position: fixed; inset: 0; z-index: 100; background: var(--bg);
+    display: grid; place-items: center; padding: 24px;
+  }
+  #lock.hidden { display: none; }
+  .lock-card {
+    width: min(380px, 100%); background: var(--surface); border: 1px solid var(--line);
+    border-radius: 18px; box-shadow: var(--shadow-lg); padding: 30px 28px;
+    display: flex; flex-direction: column; gap: 14px; text-align: center;
+  }
+  .lock-card .logo { font-size: 40px; color: var(--accent-bright); align-self: center; }
+  .lock-card h1 { font-size: 1.2rem; }
+  .lock-card p { font-size: 0.86rem; color: var(--muted); }
+  .lock-card form { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .lock-card .hint { font-size: 0.76rem; color: var(--muted); }
+  .lock-card .err { color: var(--bad); font-size: 0.82rem; min-height: 1em; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<!-- ============ LOCK ============ -->
+<div id="lock">
+  <div class="lock-card">
+    <span class="logo"></span>
+    <h1 class="fa">پنل مدیریت easymakebot</h1>
+    <h1 class="en">easymakebot Admin</h1>
+    <p class="fa">این نمای دموی طراحی است. در محیط واقعی، دسترسی فقط برای <span class="mono">PLATFORM_ADMIN_ID</span> در تلگرام باز است.</p>
+    <p class="en">This is a design demo. In production, access is limited to <span class="mono">PLATFORM_ADMIN_ID</span> in Telegram.</p>
+    <form id="lockForm">
+      <input type="text" id="lockKey" autocomplete="off" placeholder="Admin key" aria-label="Admin key">
+      <button class="btn btn-primary" type="submit">
+        <span class="fa">ورود</span><span class="en">Enter</span>
+      </button>
+      <div class="err" id="lockErr"></div>
+      <div class="hint fa">کلید دمو: <b>1234</b></div>
+      <div class="hint en">Demo key: <b>1234</b></div>
+    </form>
+  </div>
+</div>
+
+<!-- ============ APP ============ -->
+<div class="shell" id="app" hidden>
+  <aside>
+    <div class="brand">
+      <span class="logo"></span>
+      <span>easymakebot</span>
+      <span class="tag fa">مدیریت</span><span class="tag en">Admin</span>
+    </div>
+
+    <button class="nav-item active" data-view="overview" type="button">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>
+      <span class="fa">نمای کلی</span><span class="en">Overview</span>
+    </button>
+    <button class="nav-item" data-view="users" type="button">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20c0-3.3 2.5-5.5 5.5-5.5s5.5 2.2 5.5 5.5"/><path d="M16 5.2A3 3 0 0 1 16 11M20.5 20c0-2.6-1.4-4.4-3.5-5.1"/></svg>
+      <span class="fa">کاربران</span><span class="en">Users</span>
+    </button>
+    <button class="nav-item" data-view="bots" type="button">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M8.5 12.5h.01M15.5 12.5h.01M9 16h6"/></svg>
+      <span class="fa">ربات‌ها</span><span class="en">Bots</span>
+    </button>
+    <button class="nav-item" data-view="broadcast" type="button">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 11v2a1 1 0 0 0 1 1h3l6 4V6L8 10H5a1 1 0 0 0-1 1Z"/><path d="M17.5 8.5a5 5 0 0 1 0 7"/></svg>
+      <span class="fa">پیام همگانی</span><span class="en">Broadcast</span>
+    </button>
+
+    <div class="nav-sep"></div>
+
+    <div class="side-ctl">
+      <button class="mini-btn" id="langBtn" type="button"><span class="fa">EN</span><span class="en">فارسی</span></button>
+      <button class="mini-btn" id="themeBtn" type="button"><span id="themeIcon">◐</span></button>
+    </div>
+  </aside>
+
+  <main>
+    <!-- ---------- OVERVIEW ---------- -->
+    <section class="view active" id="view-overview">
+      <div class="topbar">
+        <div>
+          <h1 class="fa">نمای کلی پلتفرم</h1><h1 class="en">Platform overview</h1>
+          <div class="sub fa">وضعیت لحظه‌ای همهٔ کاربران و ربات‌های ساخته‌شده</div>
+          <div class="sub en">A live snapshot across every user and every built bot</div>
+        </div>
+        <div class="grow"></div>
+        <button class="btn btn-ghost" id="exportBtn" type="button">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/></svg>
+          <span class="fa">خروجی اکسل کامل</span><span class="en">Export full report (Excel)</span>
+        </button>
+      </div>
+
+      <div class="view-inner" style="padding:0">
+        <div class="kpi-grid" style="padding:0;margin-top:4px">
+          <div class="kpi">
+            <div class="label fa">کاربران</div><div class="label en">Users</div>
+            <div class="value tnum" data-kpi="users">1,284</div>
+            <div class="foot fa">سازندگانی که <span class="mono">/start</span> زده‌اند</div>
+            <div class="foot en">Creators who have sent <span class="mono">/start</span></div>
+          </div>
+          <div class="kpi wide">
+            <div class="label fa">ربات‌های ساخته‌شده</div><div class="label en">Built bots</div>
+            <div class="value tnum" data-kpi="bots">437</div>
+            <div class="bar" role="img" aria-label="Bot status breakdown">
+              <span class="s-live" style="width:33.9%"></span>
+              <span class="s-expired" style="width:27.7%"></span>
+              <span class="s-never" style="width:34.8%"></span>
+              <span class="s-susp" style="width:3.6%"></span>
+            </div>
+            <div class="bar-legend">
+              <span><i class="dot" style="background:var(--ok)"></i><span class="fa">زنده ۱۴۸</span><span class="en">Live 148</span></span>
+              <span><i class="dot" style="background:var(--warn)"></i><span class="fa">منقضی ۱۲۱</span><span class="en">Expired 121</span></span>
+              <span><i class="dot" style="background:var(--idle)"></i><span class="fa">فعال‌نشده ۱۵۲</span><span class="en">Never activated 152</span></span>
+              <span><i class="dot" style="background:var(--bad)"></i><span class="fa">مسدود ۱۶</span><span class="en">Suspended 16</span></span>
+            </div>
+          </div>
+          <div class="kpi">
+            <div class="label fa">مشترکان ربات‌ها</div><div class="label en">Bot subscribers</div>
+            <div class="value tnum" data-kpi="subs">39,512</div>
+            <div class="foot fa">کاربران نهاییِ همهٔ ربات‌ها</div>
+            <div class="foot en">End users across all bots</div>
+          </div>
+          <div class="kpi">
+            <div class="label fa">محصولات</div><div class="label en">Products</div>
+            <div class="value tnum" data-kpi="products">906</div>
+            <div class="foot fa">در فروشگاه‌ها و لیست‌های محتوا</div>
+            <div class="foot en">In shops and content lists</div>
+          </div>
+          <div class="kpi">
+            <div class="label fa">سفارش‌ها</div><div class="label en">Orders</div>
+            <div class="value tnum" data-kpi="orders">3,177</div>
+            <div class="foot fa">۲٬۱۴۰ سفارش پرداخت‌شده</div>
+            <div class="foot en">2,140 paid</div>
+          </div>
+          <div class="kpi">
+            <div class="label fa">درآمد کاربران</div><div class="label en">Creator revenue</div>
+            <div class="value tnum" data-kpi="rev">486.3<span class="unit fa">م. تومان</span><span class="unit en">M Toman</span></div>
+            <div class="foot fa">مجموع فروشِ پرداخت‌شدهٔ همهٔ ربات‌ها</div>
+            <div class="foot en">Total paid sales across all bots</div>
+          </div>
+        </div>
+
+        <h2 class="section-title fa">فعالیت اخیر <span class="count">۱۰ مورد آخر</span></h2>
+        <h2 class="section-title en">Recent activity <span class="count">last 10</span></h2>
+        <div class="panels">
+          <div class="panel">
+            <h3 class="fa">ربات‌های تازه‌ساز</h3><h3 class="en">New bots</h3>
+            <ul id="recentBots"></ul>
+          </div>
+          <div class="panel">
+            <h3 class="fa">سفارش‌های اخیر</h3><h3 class="en">Recent orders</h3>
+            <ul id="recentOrders"></ul>
+          </div>
+          <div class="panel">
+            <h3 class="fa">کاربران تازه‌وارد</h3><h3 class="en">New users</h3>
+            <ul id="recentUsers"></ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- USERS ---------- -->
+    <section class="view" id="view-users">
+      <div class="topbar">
+        <div>
+          <h1 class="fa">کاربران</h1><h1 class="en">Users</h1>
+          <div class="sub fa">هر سازنده و ربات‌هایی که ساخته</div>
+          <div class="sub en">Every creator and the bots they've built</div>
+        </div>
+        <div class="grow"></div>
+        <label class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input type="text" id="userSearch" placeholder="Search by Telegram ID…" aria-label="Search users">
+        </label>
+      </div>
+      <div class="table-card">
+        <div class="twrap">
+          <table>
+            <thead><tr>
+              <th class="fa">شناسه</th><th class="en">User ID</th>
+              <th class="fa">آیدی تلگرام</th><th class="en">Telegram ID</th>
+              <th class="fa">تاریخ عضویت</th><th class="en">Joined</th>
+              <th class="num fa">تعداد ربات</th><th class="num en">Bots</th>
+            </tr></thead>
+            <tbody id="usersBody"></tbody>
+          </table>
+        </div>
+        <div class="tfoot">
+          <span id="usersCount"></span>
+          <div class="pager">
+            <button id="usersPrev" type="button">‹</button>
+            <button id="usersNext" type="button">›</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- BOTS ---------- -->
+    <section class="view" id="view-bots">
+      <div class="topbar">
+        <div>
+          <h1 class="fa">همهٔ ربات‌ها</h1><h1 class="en">All bots</h1>
+          <div class="sub fa">روی هر ردیف بزن تا مدیریت شود</div>
+          <div class="sub en">Click any row to manage it</div>
+        </div>
+        <div class="grow"></div>
+        <label class="search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input type="text" id="botSearch" placeholder="Search name or @username…" aria-label="Search bots">
+        </label>
+      </div>
+      <div class="table-card">
+        <div class="twrap">
+          <table>
+            <thead><tr>
+              <th class="fa">ربات</th><th class="en">Bot</th>
+              <th class="fa">مالک (آیدی تلگرام)</th><th class="en">Owner (Telegram ID)</th>
+              <th class="num fa">مشترک</th><th class="num en">Subs</th>
+              <th class="fa">وضعیت</th><th class="en">Status</th>
+              <th class="fa">تا تاریخ</th><th class="en">Live until</th>
+            </tr></thead>
+            <tbody id="botsBody"></tbody>
+          </table>
+        </div>
+        <div class="tfoot">
+          <span id="botsCount"></span>
+          <div class="pager">
+            <button id="botsPrev" type="button">‹</button>
+            <button id="botsNext" type="button">›</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- BROADCAST ---------- -->
+    <section class="view" id="view-broadcast">
+      <div class="topbar">
+        <div>
+          <h1 class="fa">پیام همگانی</h1><h1 class="en">Broadcast</h1>
+          <div class="sub fa">یک پیام برای همهٔ سازندگان پلتفرم</div>
+          <div class="sub en">One message to every platform creator</div>
+        </div>
+      </div>
+      <div class="bc-wrap">
+        <div class="bc-card">
+          <div class="field">
+            <span class="lbl fa">متن پیام</span><span class="lbl en">Message text</span>
+            <textarea id="bcText" rows="6" placeholder="…"></textarea>
+            <div class="cc"><span id="bcCount">0</span> <span class="fa">نویسه</span><span class="en">chars</span></div>
+          </div>
+          <div class="note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+            <span class="fa">این یک دموی طراحی است — پیام واقعاً ارسال نمی‌شود. در ربات، این کار از مسیر گیت‌شدهٔ <span class="mono">/easybotadmin</span> انجام می‌شود.</span>
+            <span class="en">This is a design demo — nothing is actually sent. In the bot, this runs through the gated <span class="mono">/easybotadmin</span> path.</span>
+          </div>
+          <button class="btn btn-primary" id="bcSend" type="button">
+            <span class="fa">ارسال به ۱٬۲۸۴ کاربر</span><span class="en">Send to 1,284 users</span>
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- drawer -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true"></aside>
+
+<!-- modal -->
+<div class="modal-scrim" id="modalScrim">
+  <div class="modal" role="dialog" aria-modal="true">
+    <h3 id="modalTitle"></h3>
+    <p id="modalBody"></p>
+    <div id="modalInputWrap" hidden><textarea id="modalInput" rows="3"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost btn-sm" id="modalCancel" type="button"><span class="fa">انصراف</span><span class="en">Cancel</span></button>
+      <button class="btn btn-primary btn-sm" id="modalOk" type="button"><span class="fa">تأیید</span><span class="en">Confirm</span></button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"><div class="t" id="toastT"></div></div>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var lock = document.getElementById('lock'), app = document.getElementById('app');
+  var LOGO = '<span class="logo"></span>';
+
+  /* ---------- lang + theme ---------- */
+  function isFa() { return root.getAttribute('data-lang') === 'fa'; }
+  function applyLang(l) {
+    root.setAttribute('data-lang', l);
+    root.setAttribute('lang', l);
+    root.setAttribute('dir', l === 'fa' ? 'rtl' : 'ltr');
+    try { localStorage.setItem('emb-lang', l); } catch (e) {}
+    renderAll();
+  }
+  try { applyLang(localStorage.getItem('emb-lang') === 'en' ? 'en' : 'fa'); } catch (e) { applyLang('fa'); }
+  document.getElementById('langBtn').onclick = function () { applyLang(isFa() ? 'en' : 'fa'); };
+
+  var themeIcon = document.getElementById('themeIcon');
+  function applyTheme(m) {
+    if (m === 'system') { root.removeAttribute('data-theme'); themeIcon.textContent = '◐'; }
+    else { root.setAttribute('data-theme', m); themeIcon.textContent = m === 'dark' ? '☾' : '☀'; }
+    try { localStorage.setItem('emb-theme', m); } catch (e) {}
+  }
+  try { applyTheme(localStorage.getItem('emb-theme') || 'system'); } catch (e) { applyTheme('system'); }
+  document.getElementById('themeBtn').onclick = function () {
+    applyTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  };
+
+  /* ---------- digits ---------- */
+  var FA_D = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
+  function faDigits(s) { return isFa() ? String(s).replace(/[0-9]/g, function (d) { return FA_D[+d]; }) : String(s); }
+  function nfmt(n) { return faDigits(n.toLocaleString('en-US')); }
+
+  /* ---------- lock ---------- */
+  document.getElementById('lockForm').onsubmit = function (e) {
+    e.preventDefault();
+    var v = document.getElementById('lockKey').value.trim();
+    if (v === '1234') {
+      lock.classList.add('hidden');
+      app.hidden = false;
+      renderAll();
+    } else {
+      document.getElementById('lockErr').textContent = isFa() ? 'کلید نادرست است.' : 'Wrong key.';
+    }
+  };
+
+  /* ---------- nav ---------- */
+  var navItems = [].slice.call(document.querySelectorAll('.nav-item'));
+  navItems.forEach(function (b) {
+    b.onclick = function () {
+      navItems.forEach(function (x) { x.classList.remove('active'); });
+      b.classList.add('active');
+      document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('active'); });
+      document.getElementById('view-' + b.dataset.view).classList.add('active');
+      window.scrollTo(0, 0);
+    };
+  });
+
+  /* ---------- toast ---------- */
+  var toastT = document.getElementById('toastT'), toastTimer;
+  function toast(msg) {
+    toastT.textContent = msg;
+    toastT.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastT.classList.remove('show'); }, 2600);
+  }
+
+  /* ---------- modal ---------- */
+  var mScrim = document.getElementById('modalScrim');
+  var mTitle = document.getElementById('modalTitle'), mBody = document.getElementById('modalBody');
+  var mInputWrap = document.getElementById('modalInputWrap'), mInput = document.getElementById('modalInput');
+  var mOk = document.getElementById('modalOk'), mCancel = document.getElementById('modalCancel');
+  var mResolver = null;
+  function modal(opts) {
+    mTitle.textContent = opts.title;
+    mBody.textContent = opts.body || '';
+    mBody.style.display = opts.body ? '' : 'none';
+    mInputWrap.hidden = !opts.input;
+    mInput.value = opts.inputValue || '';
+    mInput.placeholder = opts.placeholder || '';
+    mOk.className = 'btn btn-sm ' + (opts.danger ? 'btn-danger' : 'btn-primary');
+    mScrim.classList.add('show');
+    if (opts.input) setTimeout(function () { mInput.focus(); }, 60);
+    return new Promise(function (res) { mResolver = res; });
+  }
+  function closeModal(val) { mScrim.classList.remove('show'); if (mResolver) { mResolver(val); mResolver = null; } }
+  mOk.onclick = function () { closeModal(mInputWrap.hidden ? true : mInput.value.trim()); };
+  mCancel.onclick = function () { closeModal(null); };
+  mScrim.onclick = function (e) { if (e.target === mScrim) closeModal(null); };
+
+  /* ---------- sample data ---------- */
+  function daysFromNow(d) { var t = new Date(); t.setDate(t.getDate() + d); return t; }
+  function dstr(dt) {
+    var y = dt.getFullYear(), m = ('0' + (dt.getMonth() + 1)).slice(-2), da = ('0' + dt.getDate()).slice(-2);
+    return faDigits(y + '-' + m + '-' + da);
+  }
+  function ago(dt) {
+    var days = Math.round((Date.now() - dt.getTime()) / 86400000);
+    if (days <= 0) return isFa() ? 'امروز' : 'today';
+    if (days === 1) return isFa() ? 'دیروز' : '1d ago';
+    return isFa() ? faDigits(days) + ' روز پیش' : days + 'd ago';
+  }
+
+  var NAMES = ['کافه رست','Digikala Deals','آکادمی کدنویسی','Perfume Bar','باشگاه کتاب','Nova Store','دیجی‌شارژ','Green Grocer','استودیو عکس','Ticket Line','رزرو آرایشگاه','Crypto Signals','فروشگاه گل','Language Hub','ساپورت تیم'];
+  var USTATE = ['live','live','live','expired','never','live','expired','never','suspended','live','never','expired','live','never','live'];
+  var bots = NAMES.map(function (nm, i) {
+    var st = USTATE[i];
+    var lu = st === 'live' ? daysFromNow([12, 3, 27, 0, 0, 19, 0, 0, 0, 8, 0, 0, 21, 0, 5][i])
+           : st === 'expired' ? daysFromNow(-[6, 0, 0, 4, 0, 0, 11, 0, 0, 0, 0, 2, 0, 0, 0][i] - 3)
+           : null;
+    return {
+      id: 'b' + (i + 1),
+      name: nm,
+      username: '@' + ['cafe_rest','digi_deals','code_academy','perfume_bar','book_club','nova_store','digi_charge','green_grocer','photo_studio','ticket_line','salon_book','crypto_sig','flower_shop','lang_hub','support_team'][i] + '_bot',
+      owner: [128500419, 55210087, 731900244, 402118765, 999002211, 610455327, 288100933, 174655201, 820077410, 351902688, 47811902, 903221145, 655310098, 210945677, 788120043][i],
+      subs: [4120, 15230, 880, 2610, 340, 6700, 1920, 205, 90, 5400, 150, 3300, 760, 410, 1120][i],
+      status: st,
+      live_until: lu,
+      created: daysFromNow(-[2, 40, 9, 61, 5, 22, 88, 3, 30, 12, 1, 47, 19, 7, 130][i]),
+      orders: [312, 2410, 41, 190, 6, 980, 220, 3, 0, 760, 2, 340, 88, 12, 130][i],
+      revenue: [86300000, 512400000, 3900000, 41200000, 900000, 233000000, 28700000, 400000, 0, 156000000, 300000, 74500000, 12100000, 2600000, 31000000][i]
+    };
+  });
+
+  var users = [];
+  for (var i = 0; i < 11; i++) {
+    users.push({
+      id: i + 1,
+      tg: [128500419, 55210087, 731900244, 402118765, 999002211, 610455327, 288100933, 174655201, 820077410, 351902688, 47811902][i],
+      created: daysFromNow(-[2, 40, 9, 61, 5, 22, 88, 3, 30, 12, 1][i]),
+      botCount: [1, 3, 1, 2, 0, 4, 1, 1, 1, 2, 0][i]
+    });
+  }
+
+  /* ---------- overview lists ---------- */
+  function renderOverview() {
+    var rb = document.getElementById('recentBots');
+    rb.innerHTML = bots.slice().sort(function (a, b) { return b.created - a.created; }).slice(0, 6).map(function (b) {
+      return '<li>' + LOGO.replace('class="logo"', 'class="logo" style="font-size:15px;color:var(--accent-bright)"') +
+        '<span class="who">' + esc(b.name) + '</span><span class="meta">' + ago(b.created) + '</span></li>';
+    }).join('');
+
+    var ro = document.getElementById('recentOrders');
+    var ords = [
+      { p: isFa() ? 'اشتراک ۱ ماهه' : '1-month plan', b: bots[1].name, amt: 99000, d: 0 },
+      { p: isFa() ? 'پکیج پایتون' : 'Python pack', b: bots[2].name, amt: 290000, d: 0 },
+      { p: isFa() ? 'ادکلن Nova' : 'Nova perfume', b: bots[3].name, amt: 640000, d: 1 },
+      { p: isFa() ? 'بلیط کنسرت' : 'Concert ticket', b: bots[9].name, amt: 1200000, d: 1 },
+      { p: isFa() ? 'شارژ ۵۰ هزار' : '50k top-up', b: bots[6].name, amt: 50000, d: 2 },
+      { p: isFa() ? 'دستهٔ گل رز' : 'Rose bouquet', b: bots[12].name, amt: 380000, d: 3 }
+    ];
+    ro.innerHTML = ords.map(function (o) {
+      return '<li><span class="who">' + esc(o.p) + ' · <span style="color:var(--muted)">' + esc(o.b) + '</span></span>' +
+        '<span class="amt">' + nfmt(o.amt) + '</span></li>';
+    }).join('');
+
+    var ru = document.getElementById('recentUsers');
+    ru.innerHTML = users.slice().sort(function (a, b) { return b.created - a.created; }).slice(0, 6).map(function (u) {
+      return '<li><span class="who mono">' + faDigits(u.tg) + '</span><span class="meta">' + ago(u.created) + '</span></li>';
+    }).join('');
+
+    document.querySelectorAll('[data-kpi]').forEach(function (el) {
+      var map = { users: '1,284', bots: '437', subs: '39,512', products: '906', orders: '3,177' };
+      var k = el.dataset.kpi;
+      if (map[k]) el.textContent = faDigits(map[k]);
+    });
+  }
+
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  /* ---------- users table ---------- */
+  var uPage = 0, U_SIZE = 8, uFilter = '';
+  function renderUsers() {
+    var rows = users.filter(function (u) { return !uFilter || String(u.tg).indexOf(uFilter) > -1; });
+    var pages = Math.max(1, Math.ceil(rows.length / U_SIZE));
+    if (uPage >= pages) uPage = pages - 1;
+    var slice = rows.slice(uPage * U_SIZE, uPage * U_SIZE + U_SIZE);
+    var body = document.getElementById('usersBody');
+    body.innerHTML = slice.length ? slice.map(function (u) {
+      return '<tr data-uid="' + u.id + '">' +
+        '<td class="mono">#' + faDigits(u.id) + '</td>' +
+        '<td class="mono">' + faDigits(u.tg) + '</td>' +
+        '<td>' + dstr(u.created) + '</td>' +
+        '<td class="num">' + faDigits(u.botCount) + '</td></tr>';
+    }).join('') : '<tr><td colspan="4"><div class="empty">' + (isFa() ? 'موردی نیست' : 'Nothing found') + '</div></td></tr>';
+    [].slice.call(body.querySelectorAll('tr[data-uid]')).forEach(function (tr) {
+      tr.onclick = function () { openUser(+tr.dataset.uid); };
+    });
+    document.getElementById('usersCount').textContent = isFa()
+      ? faDigits(rows.length) + ' کاربر · صفحهٔ ' + faDigits(uPage + 1) + ' از ' + faDigits(pages)
+      : rows.length + ' users · page ' + (uPage + 1) + ' of ' + pages;
+    document.getElementById('usersPrev').disabled = uPage === 0;
+    document.getElementById('usersNext').disabled = uPage >= pages - 1;
+  }
+  document.getElementById('usersPrev').onclick = function () { uPage--; renderUsers(); };
+  document.getElementById('usersNext').onclick = function () { uPage++; renderUsers(); };
+  document.getElementById('userSearch').oninput = function (e) { uFilter = e.target.value.trim(); uPage = 0; renderUsers(); };
+
+  /* ---------- bots table ---------- */
+  var bPage = 0, B_SIZE = 8, bFilter = '';
+  var ST_LABEL = {
+    live: { fa: 'زنده', en: 'live' }, expired: { fa: 'منقضی', en: 'expired' },
+    never: { fa: 'فعال‌نشده', en: 'never activated' }, suspended: { fa: 'مسدود', en: 'suspended' }
+  };
+  function stPill(s) {
+    return '<span class="pill ' + s + '">' + (isFa() ? ST_LABEL[s].fa : ST_LABEL[s].en) + '</span>';
+  }
+  function renderBots() {
+    var rows = bots.filter(function (b) {
+      if (!bFilter) return true;
+      var q = bFilter.toLowerCase();
+      return b.name.toLowerCase().indexOf(q) > -1 || b.username.toLowerCase().indexOf(q) > -1;
+    });
+    var pages = Math.max(1, Math.ceil(rows.length / B_SIZE));
+    if (bPage >= pages) bPage = pages - 1;
+    var slice = rows.slice(bPage * B_SIZE, bPage * B_SIZE + B_SIZE);
+    var body = document.getElementById('botsBody');
+    body.innerHTML = slice.length ? slice.map(function (b) {
+      return '<tr data-bid="' + b.id + '">' +
+        '<td><span class="name-cell">' + LOGO + esc(b.name) + ' <span class="mono" style="font-weight:400">' + esc(b.username) + '</span></span></td>' +
+        '<td class="mono">' + faDigits(b.owner) + '</td>' +
+        '<td class="num">' + nfmt(b.subs) + '</td>' +
+        '<td>' + stPill(b.status) + '</td>' +
+        '<td>' + (b.live_until ? dstr(b.live_until) : '<span style="color:var(--muted)">—</span>') + '</td></tr>';
+    }).join('') : '<tr><td colspan="5"><div class="empty">' + (isFa() ? 'موردی نیست' : 'Nothing found') + '</div></td></tr>';
+    [].slice.call(body.querySelectorAll('tr[data-bid]')).forEach(function (tr) {
+      tr.onclick = function () { openBot(tr.dataset.bid); };
+    });
+    document.getElementById('botsCount').textContent = isFa()
+      ? faDigits(rows.length) + ' ربات · صفحهٔ ' + faDigits(bPage + 1) + ' از ' + faDigits(pages)
+      : rows.length + ' bots · page ' + (bPage + 1) + ' of ' + pages;
+    document.getElementById('botsPrev').disabled = bPage === 0;
+    document.getElementById('botsNext').disabled = bPage >= pages - 1;
+  }
+  document.getElementById('botsPrev').onclick = function () { bPage--; renderBots(); };
+  document.getElementById('botsNext').onclick = function () { bPage++; renderBots(); };
+  document.getElementById('botSearch').oninput = function (e) { bFilter = e.target.value.trim(); bPage = 0; renderBots(); };
+
+  /* ---------- drawer ---------- */
+  var scrim = document.getElementById('scrim'), drawer = document.getElementById('drawer');
+  function closeDrawer() { drawer.classList.remove('show'); scrim.classList.remove('show'); drawer.setAttribute('aria-hidden', 'true'); }
+  scrim.onclick = closeDrawer;
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeDrawer(); if (mScrim.classList.contains('show')) closeModal(null); } });
+
+  function openUser(uid) {
+    var u = users.find(function (x) { return x.id === uid; });
+    if (!u) return;
+    var owned = bots.filter(function (b, i) { return (b.owner === u.tg); });
+    var L = isFa();
+    drawer.innerHTML =
+      '<div class="drawer-head"><div class="row"><h2>' + (L ? 'کاربر #' : 'User #') + faDigits(u.id) + '</h2>' +
+      '<button class="x-btn" type="button" aria-label="Close">✕</button></div>' +
+      '<div class="uname">Telegram ID ' + faDigits(u.tg) + '</div></div>' +
+      '<div class="drawer-body">' +
+        '<div class="kv"><span class="k">' + (L ? 'تاریخ عضویت' : 'Joined') + '</span><span class="v">' + dstr(u.created) + '</span></div>' +
+        '<div class="kv"><span class="k">' + (L ? 'تعداد ربات' : 'Bots built') + '</span><span class="v">' + faDigits(u.botCount) + '</span></div>' +
+        '<div><div class="lbl" style="font-size:.8rem;font-weight:600;color:var(--ink-soft);margin-bottom:8px">' + (L ? 'ربات‌های این کاربر' : "This user's bots") + '</div>' +
+        (owned.length ? '<div class="act-list">' + owned.map(function (b) {
+          return '<button class="btn btn-ghost btn-sm" data-goto="' + b.id + '" type="button" style="justify-content:flex-start;gap:8px">' + LOGO + esc(b.name) + ' ' + stPill(b.status) + '</button>';
+        }).join('') + '</div>' : '<p style="color:var(--muted);font-size:.86rem">' + (L ? 'هنوز رباتی نساخته' : 'No bots yet') + '</p>') +
+        '</div>' +
+      '</div>';
+    wireDrawer();
+    [].slice.call(drawer.querySelectorAll('[data-goto]')).forEach(function (b) {
+      b.onclick = function () { openBot(b.dataset.goto); };
+    });
+    showDrawer();
+  }
+
+  function openBot(bid) {
+    var b = bots.find(function (x) { return x.id === bid; });
+    if (!b) return;
+    var L = isFa();
+    drawer.innerHTML =
+      '<div class="drawer-head"><div class="row"><h2>' + esc(b.name) + '</h2>' +
+      '<button class="x-btn" type="button" aria-label="Close">✕</button></div>' +
+      '<div class="uname">' + esc(b.username) + ' · ' + (L ? 'مالک ' : 'owner ') + faDigits(b.owner) + '</div></div>' +
+      '<div class="drawer-body">' +
+        '<div>' + stPill(b.status) + (b.live_until ? ' <span style="color:var(--muted);font-size:.83rem">' + (L ? 'تا ' : 'until ') + dstr(b.live_until) + '</span>' : '') + '</div>' +
+        '<div class="stat-row">' +
+          '<div class="s"><div class="k">' + (L ? 'مشترک' : 'Subs') + '</div><div class="v">' + nfmt(b.subs) + '</div></div>' +
+          '<div class="s"><div class="k">' + (L ? 'سفارش پرداختی' : 'Paid orders') + '</div><div class="v">' + nfmt(b.orders) + '</div></div>' +
+          '<div class="s"><div class="k">' + (L ? 'درآمد' : 'Revenue') + '</div><div class="v">' + (b.revenue >= 1e6 ? faDigits((b.revenue / 1e6).toFixed(1)) + (L ? 'م' : 'M') : nfmt(b.revenue)) + '</div></div>' +
+        '</div>' +
+
+        '<div class="field"><span class="lbl">' + (L ? 'مسدودسازی' : 'Suspension') + '</span>' +
+        (b.status === 'suspended'
+          ? '<button class="btn btn-ghost" data-act="unsuspend" type="button">' + (L ? 'رفع مسدودی' : 'Unsuspend') + '</button>'
+          : '<button class="btn btn-danger" data-act="suspend" type="button">' + (L ? 'مسدود کردن ربات' : 'Suspend bot') + '</button>') +
+        '</div>' +
+
+        '<div class="field"><span class="lbl">' + (L ? 'اعطای دسترسی (زنده‌سازی)' : 'Grant access (make live)') + '</span>' +
+        '<div class="grant-grid">' +
+          '<button class="btn btn-ghost btn-sm" data-grant="30" type="button">+۳۰ ' + (L ? 'روز' : 'days') + '</button>'.replace('۳۰', L ? '۳۰' : '30') +
+          '<button class="btn btn-ghost btn-sm" data-grant="90" type="button">+' + (L ? '۹۰ روز' : '90 days') + '</button>' +
+          '<button class="btn btn-ghost btn-sm" data-grant="365" type="button">+' + (L ? '۳۶۵ روز' : '365 days') + '</button>' +
+          '<button class="btn btn-ghost btn-sm" data-grant="permanent" type="button">♾ ' + (L ? 'دائمی' : 'Permanent') + '</button>' +
+        '</div></div>' +
+
+        '<div class="field"><span class="lbl">' + (L ? 'سایر' : 'Other') + '</span><div class="act-list">' +
+          '<button class="btn btn-ghost btn-sm" data-act="rename" type="button">✏️ ' + (L ? 'تغییر نام' : 'Rename') + '</button>' +
+          '<button class="btn btn-danger btn-sm" data-act="delete" type="button">🗑 ' + (L ? 'حذف ربات' : 'Delete bot') + '</button>' +
+        '</div></div>' +
+
+        '<p style="color:var(--muted);font-size:.78rem">' + (L ? 'دموی طراحی — تغییرها فقط در همین صفحه اعمال می‌شود.' : 'Design demo — changes apply only on this page.') + '</p>' +
+      '</div>';
+    wireDrawer();
+
+    drawer.querySelectorAll('[data-grant]').forEach(function (btn) {
+      btn.onclick = function () {
+        var g = btn.dataset.grant;
+        b.status = 'live';
+        b.live_until = g === 'permanent' ? daysFromNow(3650) : daysFromNow(+g);
+        toast(L ? 'دسترسی اعطا شد: ' + (g === 'permanent' ? 'دائمی' : faDigits(g) + ' روز') : 'Access granted: ' + (g === 'permanent' ? 'permanent' : g + ' days'));
+        renderBots(); renderOverview(); openBot(bid);
+      };
+    });
+    drawer.querySelectorAll('[data-act]').forEach(function (btn) {
+      btn.onclick = function () { botAction(btn.dataset.act, b, bid); };
+    });
+    showDrawer();
+  }
+
+  function botAction(act, b, bid) {
+    var L = isFa();
+    if (act === 'suspend') {
+      modal({ title: L ? 'مسدود کردن ربات' : 'Suspend bot', body: L ? 'دلیل مسدودسازی (برای مالک نمایش داده می‌شود):' : 'Reason (shown to the owner):', input: true, placeholder: L ? 'مثلاً نقض قوانین' : 'e.g. terms violation', danger: true })
+        .then(function (r) {
+          if (r === null) return;
+          b.status = 'suspended'; b.suspension_reason = r || '—';
+          toast(L ? 'ربات مسدود شد و از تلگرام آفلاین شد.' : 'Bot suspended and taken offline.');
+          renderBots(); renderOverview(); openBot(bid);
+        });
+    } else if (act === 'unsuspend') {
+      b.status = b.live_until && b.live_until > new Date() ? 'live' : (b.live_until ? 'expired' : 'never');
+      toast(L ? 'مسدودی برداشته شد.' : 'Suspension lifted.');
+      renderBots(); renderOverview(); openBot(bid);
+    } else if (act === 'rename') {
+      modal({ title: L ? 'تغییر نام ربات' : 'Rename bot', input: true, inputValue: b.name })
+        .then(function (r) {
+          if (!r) return;
+          b.name = r;
+          toast(L ? 'نام ربات تغییر کرد.' : 'Bot renamed.');
+          renderBots(); renderOverview(); openBot(bid);
+        });
+    } else if (act === 'delete') {
+      modal({ title: L ? 'حذف ربات' : 'Delete bot', body: L ? 'این کار همهٔ دستورها، محتوا، محصولات و سفارش‌های این ربات را برای همیشه پاک می‌کند.' : 'This permanently deletes all commands, content, products and orders for this bot.', danger: true })
+        .then(function (r) {
+          if (r === null) return;
+          var idx = bots.findIndex(function (x) { return x.id === bid; });
+          if (idx > -1) bots.splice(idx, 1);
+          toast(L ? 'ربات حذف شد.' : 'Bot deleted.');
+          closeDrawer(); renderBots(); renderOverview();
+        });
+    }
+  }
+
+  function wireDrawer() {
+    var x = drawer.querySelector('.x-btn');
+    if (x) x.onclick = closeDrawer;
+  }
+  function showDrawer() {
+    drawer.classList.add('show'); scrim.classList.add('show'); drawer.setAttribute('aria-hidden', 'false');
+    drawer.scrollTop = 0;
+  }
+
+  /* ---------- broadcast ---------- */
+  var bcText = document.getElementById('bcText');
+  bcText.oninput = function () { document.getElementById('bcCount').textContent = faDigits(bcText.value.length); };
+  document.getElementById('bcSend').onclick = function () {
+    var L = isFa();
+    if (!bcText.value.trim()) { toast(L ? 'متن پیام خالی است.' : 'Message is empty.'); return; }
+    modal({ title: L ? 'ارسال پیام همگانی؟' : 'Send broadcast?', body: L ? 'به ۱٬۲۸۴ کاربر ارسال می‌شود. (در این دمو واقعاً ارسال نمی‌شود.)' : 'Goes to 1,284 users. (Nothing is actually sent in this demo.)' })
+      .then(function (r) {
+        if (r === null) return;
+        toast(L ? 'دمو: پیام ارسال نشد.' : 'Demo: nothing was sent.');
+        bcText.value = ''; document.getElementById('bcCount').textContent = faDigits(0);
+      });
+  };
+
+  document.getElementById('exportBtn').onclick = function () {
+    toast(isFa() ? 'دمو: در نسخهٔ واقعی یک فایل Excel ساخته می‌شود.' : 'Demo: the real version builds an Excel file.');
+  };
+
+  /* ---------- render all ---------- */
+  function renderAll() {
+    if (!app || app.hidden) return;
+    renderOverview();
+    renderUsers();
+    renderBots();
+  }
+})();
+</script>
+
+</body>
+</html>

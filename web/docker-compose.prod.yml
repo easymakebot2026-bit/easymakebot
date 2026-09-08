@@ -1,0 +1,76 @@
+# Production overrides. Use together with the base file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Assumes:
+#   - real values in .env (salts, strong passwords, WP_HOME=https://your-domain)
+#   - WP_FORCE_SSL_ADMIN=true in .env
+#   - TLS: either Cloudflare "Full (strict)" with an origin cert mounted into
+#     nginx (./certs/), OR swap nginx for the caddy override (docker-compose.caddy.yml).
+
+services:
+  wordpress:
+    environment:
+      WP_FORCE_SSL_ADMIN: "true"
+    # The cPanel mail server's hostname (s438.bitcommand.com) is not resolvable
+    # from the Iran host / ParsPack resolvers. Pin it to the hosting's shared IP
+    # so WP Mail SMTP can reach it on 465 with a cert that still matches the name.
+    extra_hosts:
+      - "s438.bitcommand.com:89.44.243.103"
+    # No code bind-mounts in prod except our own theme + mu-plugins (still
+    # version-controlled and deployed with the repo). Everything else is baked
+    # into the named volume and updated via wp-cli.
+    volumes:
+      - wp_data:/var/www/html
+      - ./config/php-security.ini:/usr/local/etc/php/conf.d/zz-easymakebot.ini:ro
+      - ./wordpress/wp-content/mu-plugins:/var/www/html/wp-content/mu-plugins:ro
+      - ./wordpress/wp-content/themes/easymakebot:/var/www/html/wp-content/themes/easymakebot:ro
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  nginx:
+    ports: !override
+      - "80:80"
+      - "443:443"
+    volumes:
+      - wp_data:/var/www/html:ro
+      - ./wordpress/wp-content/mu-plugins:/var/www/html/wp-content/mu-plugins:ro
+      - ./wordpress/wp-content/themes/easymakebot:/var/www/html/wp-content/themes/easymakebot:ro
+      - ./nginx/00-zones.conf:/etc/nginx/conf.d/00-zones.conf:ro
+      - ./nginx/prod.conf:/etc/nginx/conf.d/default.conf:ro       # generated from prod.conf.template
+      - ./nginx/fastcgi_params_wp:/etc/nginx/fastcgi_params_wp:ro
+      - ./nginx/cloudflare-realip.conf:/etc/nginx/conf.d/01-cloudflare-realip.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  # Mailpit is dev-only — keep it from starting in prod.
+  mailpit:
+    profiles: ["dev-only-disabled"]
+
+  # Nightly DB + wp-content backup to an off-box rclone remote.
+  backup:
+    image: alpine:3.20
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-easymakebot_wp}
+      MARIADB_USER: ${MARIADB_USER:-emb_wp}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?}
+      RCLONE_REMOTE: ${RCLONE_REMOTE:?set an rclone remote in .env}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-30}
+    volumes:
+      - wp_data:/var/www/html:ro
+      - ./scripts/backup.sh:/backup.sh:ro
+      - ./backups:/backups
+      - ${RCLONE_CONFIG_DIR:-./config/rclone}:/root/.config/rclone:ro
+    networks: [internal]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        apk add --no-cache mariadb-client rclone tzdata coreutils >/dev/null &&
+        echo '0 3 * * * /backup.sh >> /proc/1/fd/1 2>&1' | crontab - &&
+        crond -f -l 8

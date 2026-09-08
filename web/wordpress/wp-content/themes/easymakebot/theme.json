@@ -1,0 +1,125 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/theme.json",
+	"version": 3,
+	"settings": {
+		"appearanceTools": true,
+		"useRootPaddingAwareAlignments": true,
+		"layout": { "contentSize": "1160px", "wideSize": "1320px" },
+		"spacing": {
+			"units": ["px", "rem", "%", "vw", "vh"],
+			"spacingScale": { "steps": 0 },
+			"spacingSizes": [
+				{ "slug": "20", "size": "clamp(0.75rem, 2vw, 1rem)", "name": "1 · XS" },
+				{ "slug": "30", "size": "clamp(1rem, 3vw, 1.5rem)", "name": "2 · S" },
+				{ "slug": "40", "size": "clamp(1.5rem, 4vw, 2.25rem)", "name": "3 · M" },
+				{ "slug": "50", "size": "clamp(2.25rem, 6vw, 3.5rem)", "name": "4 · L" },
+				{ "slug": "60", "size": "clamp(3.5rem, 9vw, 6rem)", "name": "5 · XL" },
+				{ "slug": "70", "size": "clamp(5rem, 12vw, 8rem)", "name": "6 · XXL" }
+			]
+		},
+		"color": {
+			"defaultPalette": false,
+			"defaultGradients": false,
+			"custom": false,
+			"customDuotone": false,
+			"palette": [
+				{ "slug": "bg",            "color": "#eef4f8", "name": "Background" },
+				{ "slug": "surface",       "color": "#ffffff", "name": "Surface" },
+				{ "slug": "surface-2",     "color": "#f3f8fb", "name": "Surface muted" },
+				{ "slug": "ink",           "color": "#0d2230", "name": "Ink" },
+				{ "slug": "ink-soft",      "color": "#3d576a", "name": "Ink soft" },
+				{ "slug": "muted",         "color": "#6d8798", "name": "Muted" },
+				{ "slug": "line",          "color": "#d9e6ee", "name": "Hairline" },
+				{ "slug": "accent",        "color": "#0f7fc4", "name": "Accent" },
+				{ "slug": "accent-deep",   "color": "#0a6aa8", "name": "Accent deep" },
+				{ "slug": "accent-bright", "color": "#1e9fec", "name": "Accent bright" },
+				{ "slug": "accent-ink",    "color": "#ffffff", "name": "On accent" },
+				{ "slug": "mint",          "color": "#0f9d76", "name": "Mint" },
+				{ "slug": "mint-soft",     "color": "#e4f5ef", "name": "Mint soft" }
+			]
+		},
+		"typography": {
+			"fluid": true,
+			"defaultFontSizes": false,
+			"fontFamilies": [
+				{
+					"slug": "body",
+					"name": "Body",
+					"fontFamily": "Vazirmatn, 'IBM Plex Sans', system-ui, -apple-system, sans-serif",
+					"fontFace": [
+						{ "fontFamily": "Vazirmatn", "fontWeight": "400", "fontStyle": "normal", "fontDisplay": "swap", "src": ["file:./assets/fonts/vazirmatn-400.woff2"] },
+						{ "fontFamily": "Vazirmatn", "fontWeight": "500", "fontStyle": "normal", "fontDisplay": "swap", "src": ["file:./assets/fonts/vazirmatn-500.woff2"] },
+						{ "fontFamily": "Vazirmatn", "fontWeight": "600", "fontStyle": "normal", "fontDisplay": "swap", "src": ["file:./assets/fonts/vazirmatn-600.woff2"] },
+						{ "fontFamily": "Vazirmatn", "fontWeight": "700", "fontStyle": "normal", "fontDisplay": "swap", "src": ["file:./assets/fonts/vazirmatn-700.woff2"] },
+						{ "fontFamily": "'IBM Plex Sans'", "fontWeight": "400", "fontStyle": "normal", "fontDisplay": "swap", "src": ["file:./assets/fonts/plex-400.woff2"] },
+						{ "fontFamily": "'IBM Plex Sans'", "fontWeight": "500", "fontStyle": "normal", "fontDisplay": "swap", "src": ["file:./assets/fonts/plex-500.woff2"] },
+						{ "fontFamily": "'IBM Plex Sans'", "fontWeight": "600", "fontStyle": "normal", "fontDisplay": "swap", "src": ["file:./assets/fonts/plex-600.woff2"] }
+					]
+				},
+				{
+					"slug": "display",
+					"name": "Display",
+					"fontFamily": "Sora, Vazirmatn, system-ui, sans-serif",
+					"fontFace": [
+						{ "fontFamily": "Sora", "fontWeight": "600", "fontStyle": "normal", "fontDisplay": "swap", "src": ["file:./assets/fonts/sora-600.woff2"] },
+						{ "fontFamily": "Sora", "fontWeight": "700", "fontStyle": "normal", "fontDisplay": "swap", "src": ["file:./assets/fonts/sora-700.woff2"] }
+					]
+				}
+			],
+			"fontSizes": [
+				{ "slug": "small",   "size": "0.875rem", "name": "Small",   "fluid": false },
+				{ "slug": "medium",  "size": "1.0625rem", "name": "Medium", "fluid": false },
+				{ "slug": "large",   "size": "clamp(1.15rem, 1rem + 0.7vw, 1.4rem)", "name": "Large" },
+				{ "slug": "x-large", "size": "clamp(1.6rem, 1.2rem + 2vw, 2.4rem)",  "name": "X-Large" },
+				{ "slug": "xx-large","size": "clamp(2.1rem, 1.4rem + 3.4vw, 3.4rem)", "name": "XX-Large" }
+			]
+		},
+		"custom": {
+			"radius": "14px",
+			"shadow-sm": "0 1px 2px rgba(13,34,48,.06), 0 4px 12px -6px rgba(13,34,48,.12)",
+			"shadow-lg": "0 1px 2px rgba(13,34,48,.06), 0 24px 48px -20px rgba(13,34,48,.28)"
+		}
+	},
+	"styles": {
+		"color": { "background": "var(--wp--preset--color--bg)", "text": "var(--wp--preset--color--ink)" },
+		"typography": {
+			"fontFamily": "var(--wp--preset--font-family--body)",
+			"fontSize": "var(--wp--preset--font-size--medium)",
+			"lineHeight": "1.7"
+		},
+		"spacing": {
+			"blockGap": "var(--wp--preset--spacing--40)",
+			"padding": { "left": "clamp(20px, 5vw, 44px)", "right": "clamp(20px, 5vw, 44px)" }
+		},
+		"elements": {
+			"heading": {
+				"typography": { "fontFamily": "var(--wp--preset--font-family--display)", "fontWeight": "700", "lineHeight": "1.18" }
+			},
+			"h1": { "typography": { "fontSize": "var(--wp--preset--font-size--xx-large)" } },
+			"h2": { "typography": { "fontSize": "var(--wp--preset--font-size--x-large)" } },
+			"h3": { "typography": { "fontSize": "var(--wp--preset--font-size--large)" } },
+			"link": {
+				"color": { "text": "var(--wp--preset--color--accent-deep)" },
+				":hover": { "typography": { "textDecoration": "underline" } }
+			},
+			"button": {
+				"border": { "radius": "11px" },
+				"color": { "background": "var(--wp--preset--color--accent)", "text": "var(--wp--preset--color--accent-ink)" },
+				"spacing": { "padding": { "top": "0.85rem", "bottom": "0.85rem", "left": "1.5rem", "right": "1.5rem" } },
+				"typography": { "fontWeight": "600", "fontFamily": "var(--wp--preset--font-family--body)" },
+				":hover": { "color": { "background": "var(--wp--preset--color--accent-deep)", "text": "var(--wp--preset--color--accent-ink)" } }
+			}
+		},
+		"blocks": {
+			"core/site-title": { "typography": { "fontFamily": "var(--wp--preset--font-family--display)", "fontWeight": "700", "fontSize": "1.15rem" } },
+			"core/pullquote": { "border": { "width": "0" } }
+		}
+	},
+	"templateParts": [
+		{ "name": "header", "title": "Header", "area": "header" },
+		{ "name": "footer", "title": "Footer", "area": "footer" }
+	],
+	"customTemplates": [
+		{ "name": "page-wide", "title": "Page — wide, no title", "postTypes": ["page"] }
+	]
+}

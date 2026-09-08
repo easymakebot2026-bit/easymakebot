@@ -1,0 +1,39 @@
+<!-- wp:template-part {"slug":"header","tagName":"header","className":"site-header"} /-->
+
+<!-- wp:group {"tagName":"main","style":{"spacing":{"margin":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|60"}}},"layout":{"type":"constrained"}} -->
+<main class="wp-block-group" style="margin-top:var(--wp--preset--spacing--50);margin-bottom:var(--wp--preset--spacing--60)">
+
+	<!-- wp:shortcode -->[emb_tut_ui key="head"]<!-- /wp:shortcode -->
+
+	<!-- wp:query {"queryId":0,"query":{"perPage":12,"pages":0,"offset":0,"postType":"tutorial","order":"desc","orderBy":"date","inherit":true},"style":{"spacing":{"margin":{"top":"var:preset|spacing|40"}}}} -->
+	<div class="wp-block-query" style="margin-top:var(--wp--preset--spacing--40)">
+		<!-- wp:post-template {"className":"emb-tut-loop","layout":{"type":"grid","minimumColumnWidth":"260px"},"style":{"spacing":{"blockGap":"20px"}}} -->
+			<!-- wp:group {"className":"emb-tut-card is-block","style":{"spacing":{"blockGap":"0"}},"layout":{"type":"default"}} -->
+			<div class="wp-block-group emb-tut-card is-block">
+				<!-- wp:post-featured-image {"isLink":true,"height":"170px","className":"emb-tut-card__media"} /-->
+				<!-- wp:group {"style":{"spacing":{"padding":{"top":"16px","right":"16px","bottom":"18px","left":"16px"},"blockGap":"6px"}},"layout":{"type":"default"}} -->
+				<div class="wp-block-group" style="padding:16px 16px 18px">
+					<!-- wp:post-terms {"term":"tutorial_cat","className":"emb-tut-card__cat"} /-->
+					<!-- wp:post-title {"isLink":true,"level":3,"fontSize":"large"} /-->
+					<!-- wp:post-excerpt {"moreText":"","excerptLength":18} /-->
+				</div>
+				<!-- /wp:group -->
+			</div>
+			<!-- /wp:group -->
+		<!-- /wp:post-template -->
+
+		<!-- wp:query-pagination {"paginationArrow":"arrow","layout":{"type":"flex","justifyContent":"center"},"style":{"spacing":{"margin":{"top":"var:preset|spacing|50"}}}} -->
+			<!-- wp:query-pagination-previous /-->
+			<!-- wp:query-pagination-numbers /-->
+			<!-- wp:query-pagination-next /-->
+		<!-- /wp:query-pagination -->
+
+		<!-- wp:query-no-results -->
+			<!-- wp:shortcode -->[emb_tut_ui key="none"]<!-- /wp:shortcode -->
+		<!-- /wp:query-no-results -->
+	</div>
+	<!-- /wp:query -->
+</main>
+<!-- /wp:group -->
+
+<!-- wp:template-part {"slug":"footer","tagName":"footer","className":"site-footer"} /-->

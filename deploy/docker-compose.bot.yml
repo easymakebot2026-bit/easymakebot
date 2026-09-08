@@ -1,0 +1,86 @@
+# easymakebot — the Telegram bot platform. STANDALONE stack for a server
+# that only runs the bot (e.g. abroad / Germany), separate from the WordPress
+# site (web/, in Iran). The two talk only over HTTPS via Cloudflare — see
+# deploy/README.md.
+#
+#   cd deploy
+#   cp .env.bot.example .env.bot     # then fill it in (incl. APP_DOMAIN, CADDY_EMAIL)
+#   docker compose --env-file .env.bot -f docker-compose.bot.yml up -d --build
+#
+# --env-file is required: env_file: [.env.bot] below only injects values into
+# the bot container's own runtime env, but the ${POSTGRES_PASSWORD:?...} /
+# ${APP_DOMAIN:?...} / ${CADDY_EMAIL:?...} substitutions in this YAML are
+# resolved by Compose itself, which only reads a file named exactly ".env" in
+# the cwd unless --env-file points it elsewhere.
+#
+# Caddy here terminates TLS for https://<APP_DOMAIN> (the Visual Builder Mini
+# App + payment callbacks) and reverse-proxies to the bot's aiohttp server.
+
+name: easymakebot-bot
+
+networks:
+  botnet:
+
+volumes:
+  bot_db_data:
+  caddy_data:
+  caddy_config:
+
+services:
+  bot-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-easymakebot}
+      POSTGRES_USER: ${POSTGRES_USER:-easymakebot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.bot}
+    volumes:
+      - bot_db_data:/var/lib/postgresql/data
+    networks: [botnet]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-easymakebot} -d ${POSTGRES_DB:-easymakebot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  bot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: easymakebot-bot:latest
+    container_name: easymakebot-bot        # stable name for Caddy's reverse_proxy
+    restart: unless-stopped
+    env_file: [.env.bot]
+    environment:
+      # Derived here so POSTGRES_PASSWORD is the single source of truth.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-easymakebot}:${POSTGRES_PASSWORD}@bot-db:5432/${POSTGRES_DB:-easymakebot}
+      WEBAPP_PORT: "8080"
+    depends_on:
+      bot-db: { condition: service_healthy }
+    networks: [botnet]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [bot]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN in .env.bot, e.g. app.easymakebot.com}
+      CADDY_EMAIL: ${CADDY_EMAIL:?set CADDY_EMAIL in .env.bot}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [botnet]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }

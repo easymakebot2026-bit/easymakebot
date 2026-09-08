@@ -1,0 +1,40 @@
+# Non-Docker fallback: run the bot straight from a virtualenv under systemd.
+# Prefer the Docker path (docker-compose.bot.yml) so it matches the website
+# stack — use this only if you deliberately don't want Docker for the bot.
+#
+# Assumes:
+#   /opt/easymakebot            <- this repo, checked out
+#   /opt/easymakebot/venv       <- python3.13 -m venv venv && pip install -r requirements.txt
+#   /opt/easymakebot/webapp/dist<- built:  (cd webapp && npm ci && npm run build)
+#   /opt/easymakebot/.env       <- filled from deploy/.env.bot.example
+#                                  (set DATABASE_URL explicitly here — no compose to derive it)
+#   a local PostgreSQL reachable via that DATABASE_URL
+#
+# Install:
+#   sudo cp deploy/systemd/easymakebot-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now easymakebot-bot
+#   journalctl -u easymakebot-bot -f
+
+[Unit]
+Description=easymakebot Telegram bot platform (polling + Mini App server)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=easymakebot
+Group=easymakebot
+WorkingDirectory=/opt/easymakebot
+EnvironmentFile=/opt/easymakebot/.env
+ExecStart=/opt/easymakebot/venv/bin/python -m bot.main
+Restart=on-failure
+RestartSec=5
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/easymakebot
+
+[Install]
+WantedBy=multi-user.target

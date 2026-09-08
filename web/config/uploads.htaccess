@@ -1,0 +1,15 @@
+# Drop this file into  wp-content/uploads/.htaccess  on an Apache host (Track B).
+# It stops any uploaded .php (etc.) from ever being executed as code.
+
+<FilesMatch "\.(?i:php[0-9]?|phtml|pht|phar|pl|py|cgi|sh|lua|asp|aspx|jsp)$">
+    Require all denied
+</FilesMatch>
+
+# Allow normal media only.
+<IfModule mod_authz_core.c>
+    <FilesMatch "\.(?i:jpe?g|png|gif|webp|avif|svg|pdf|mp4|webm|mp3|zip|docx?|xlsx?|pptx?|csv|txt)$">
+        Require all granted
+    </FilesMatch>
+</IfModule>
+
+Options -Indexes

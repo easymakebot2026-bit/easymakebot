@@ -1,0 +1,191 @@
+# easymakebot website — base stack (local dev defaults).
+# Production overrides live in docker-compose.prod.yml — run:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Local dev (this file alone):  docker compose up -d --wait   ->   http://localhost:8080
+# Mail viewer (local):          http://localhost:8025
+
+name: easymakebot-web
+
+x-restart: &restart
+  restart: unless-stopped
+
+# Shared WordPress environment — MUST be identical for the runtime container and
+# wp-cli, because the image's wp-config.php resolves everything from these vars
+# at runtime via getenv_docker().
+x-wp-env: &wp-env
+  WORDPRESS_DB_HOST: db:3306
+  WORDPRESS_DB_NAME: ${MARIADB_DATABASE:-easymakebot_wp}
+  WORDPRESS_DB_USER: ${MARIADB_USER:-emb_wp}
+  WORDPRESS_DB_PASSWORD: ${MARIADB_PASSWORD:?set in .env}
+  WORDPRESS_TABLE_PREFIX: ${WP_TABLE_PREFIX:-emb_}
+  # Appended verbatim into wp-config.php by the image ($$ = literal $ for compose).
+  WORDPRESS_CONFIG_EXTRA: |
+    /* --- URLs --- */
+    define('WP_HOME',    getenv_docker('WP_HOME',    'http://localhost:8080'));
+    define('WP_SITEURL', getenv_docker('WP_SITEURL', 'http://localhost:8080'));
+
+    /* --- Trust the reverse proxy for HTTPS detection --- */
+    if (isset($$_SERVER['HTTP_X_FORWARDED_PROTO']) && $$_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
+        $$_SERVER['HTTPS'] = 'on';
+    }
+    if (isset($$_SERVER['HTTP_X_FORWARDED_FOR'])) {
+        $$_SERVER['REMOTE_ADDR'] = trim(explode(',', $$_SERVER['HTTP_X_FORWARDED_FOR'])[0]);
+    }
+    /* Salts are set natively by the image from WORDPRESS_AUTH_KEY etc. (see anchor). */
+
+    /* --- Hardening --- */
+    define('DISALLOW_FILE_EDIT', true);
+    define('AUTOMATIC_UPDATER_DISABLED', false);
+    define('WP_AUTO_UPDATE_CORE', 'minor');
+    define('FORCE_SSL_ADMIN', filter_var(getenv_docker('WP_FORCE_SSL_ADMIN', 'false'), FILTER_VALIDATE_BOOLEAN));
+    define('WP_POST_REVISIONS', 10);
+    define('EMPTY_TRASH_DAYS', 14);
+    if (!defined('WP_DEBUG')) define('WP_DEBUG', false);
+
+    /* --- Redis object cache (plugin: redis-cache) --- */
+    define('WP_REDIS_HOST', getenv_docker('REDIS_HOST', 'redis'));
+    define('WP_REDIS_PORT', (int) getenv_docker('REDIS_PORT', '6379'));
+    define('WP_REDIS_PREFIX', getenv_docker('WP_TABLE_PREFIX', 'emb_'));
+    define('WP_REDIS_TIMEOUT', 1);
+    define('WP_REDIS_READ_TIMEOUT', 1);
+    /* Local dev mail is caught by Mailpit — scripts/install.sh points the
+       WP Mail SMTP plugin at mailpit:1025 when WP_HOME is localhost. */
+  # Read by the getenv_docker() calls above (both containers need these).
+  WP_HOME: ${WP_HOME:-http://localhost:8080}
+  WP_SITEURL: ${WP_SITEURL:-http://localhost:8080}
+  WP_FORCE_SSL_ADMIN: ${WP_FORCE_SSL_ADMIN:-false}
+  WP_TABLE_PREFIX: ${WP_TABLE_PREFIX:-emb_}
+  REDIS_HOST: ${REDIS_HOST:-redis}
+  REDIS_PORT: ${REDIS_PORT:-6379}
+  # Shared secret for the plan activation-code REST API (mu-plugin
+  # emb-activation-codes.php). The @easymakebot bot sends it as X-EMB-Key.
+  EMB_ACTIVATION_KEY: ${EMB_ACTIVATION_KEY:-}
+  # SMS OTP for Iranian account verification (mu-plugin emb-accounts.php).
+  # Leave driver "log" until the Kavenegar account + template are ready, then
+  # set these or enter them in wp-admin › Settings › easymakebot.
+  EMB_SMS_DRIVER: ${EMB_SMS_DRIVER:-log}
+  EMB_SMS_API_KEY: ${EMB_SMS_API_KEY:-}
+  EMB_SMS_TEMPLATE: ${EMB_SMS_TEMPLATE:-}
+  # Salts — the image maps WORDPRESS_<NAME> -> define('<NAME>', ...) natively.
+  # Placeholders are fine for local dev; real values REQUIRED for staging/prod.
+  WORDPRESS_AUTH_KEY: ${WP_AUTH_KEY:-dev-only-not-secret-01}
+  WORDPRESS_SECURE_AUTH_KEY: ${WP_SECURE_AUTH_KEY:-dev-only-not-secret-02}
+  WORDPRESS_LOGGED_IN_KEY: ${WP_LOGGED_IN_KEY:-dev-only-not-secret-03}
+  WORDPRESS_NONCE_KEY: ${WP_NONCE_KEY:-dev-only-not-secret-04}
+  WORDPRESS_AUTH_SALT: ${WP_AUTH_SALT:-dev-only-not-secret-05}
+  WORDPRESS_SECURE_AUTH_SALT: ${WP_SECURE_AUTH_SALT:-dev-only-not-secret-06}
+  WORDPRESS_LOGGED_IN_SALT: ${WP_LOGGED_IN_SALT:-dev-only-not-secret-07}
+  WORDPRESS_NONCE_SALT: ${WP_NONCE_SALT:-dev-only-not-secret-08}
+
+networks:
+  edge:        # nginx <-> wordpress
+  internal:    # wordpress <-> db/redis (no external exposure)
+
+volumes:
+  wp_data:     # the full /var/www/html tree (WP core + plugins + uploads)
+  db_data:
+  redis_data:
+
+services:
+  db:
+    image: mariadb:11
+    <<: *restart
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-name-resolve
+      - --max-allowed-packet=64M
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?set in .env}
+      MARIADB_DATABASE: ${MARIADB_DATABASE:-easymakebot_wp}
+      MARIADB_USER: ${MARIADB_USER:-emb_wp}
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:?set in .env}
+    volumes:
+      - db_data:/var/lib/mysql
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    <<: *restart
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    volumes:
+      - redis_data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  wordpress:
+    image: wordpress:7.1-php8.3-fpm
+    <<: *restart
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    environment:
+      <<: *wp-env
+    volumes:
+      - wp_data:/var/www/html
+      - ./config/php-security.ini:/usr/local/etc/php/conf.d/zz-easymakebot.ini:ro
+      # our own code, version-controlled, live-mounted:
+      - ./wordpress/wp-content/mu-plugins:/var/www/html/wp-content/mu-plugins
+      - ./wordpress/wp-content/themes/easymakebot:/var/www/html/wp-content/themes/easymakebot
+    networks: [edge, internal]
+
+  nginx:
+    image: nginx:1.27-alpine
+    <<: *restart
+    depends_on: [wordpress]
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    volumes:
+      - wp_data:/var/www/html:ro
+      # nginx serves static assets directly, so it needs to see the same
+      # bind-mounted theme + mu-plugins the PHP containers use.
+      - ./wordpress/wp-content/mu-plugins:/var/www/html/wp-content/mu-plugins:ro
+      - ./wordpress/wp-content/themes/easymakebot:/var/www/html/wp-content/themes/easymakebot:ro
+      - ./nginx/00-zones.conf:/etc/nginx/conf.d/00-zones.conf:ro
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/fastcgi_params_wp:/etc/nginx/fastcgi_params_wp:ro
+    networks: [edge]
+
+  mailpit:
+    image: axllent/mailpit:latest
+    <<: *restart
+    ports:
+      - "8025:8025"     # web UI — http://localhost:8025
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    networks: [edge]
+
+  # One-shot helper: `docker compose run --rm wpcli wp <command>`
+  # Same image family + identical env as `wordpress` so wp-config.php resolves
+  # the same way. install.sh also reads WP_ADMIN_* / SMTP_* from .env.
+  wpcli:
+    image: wordpress:cli-php8.3
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    env_file: [.env]
+    environment:
+      <<: *wp-env
+      HOME: /tmp                # wp-cli cache dir must be writable for uid 33
+    volumes:
+      - wp_data:/var/www/html
+      # NB: php-security.ini is deliberately NOT mounted here — its
+      # disable_functions (proc_open, shell_exec…) would break wp-cli, which
+      # shells out for db/search-replace/etc. The web runtime keeps it.
+      - ./wordpress/wp-content/mu-plugins:/var/www/html/wp-content/mu-plugins
+      - ./wordpress/wp-content/themes/easymakebot:/var/www/html/wp-content/themes/easymakebot
+      - ./scripts:/scripts:ro
+    networks: [edge, internal]
+    user: "33:33"
+    profiles: [cli]

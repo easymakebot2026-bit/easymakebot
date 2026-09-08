@@ -1,0 +1,25 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.venv/
+
+# Node / built frontend
+webapp/node_modules/
+webapp/dist/
+
+# Secrets — never commit
+.env
+.env.bot
+deploy/.env.bot
+web/.env
+
+# Local logs / scratch
+*.log
+graphify-out/
+_to_delete/
+None
+
+# Editor/local tooling
+.claude/settings.local.json
+website.txt

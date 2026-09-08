@@ -1,0 +1,1187 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>easymakebot</title>
+<link rel="icon" href="assets/logo-256.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Vazirmatn:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --logo: url("assets/logo-256.png");
+    --bg: #eef4f8;
+    --surface: #ffffff;
+    --surface-2: #f3f8fb;
+    --ink: #0d2230;
+    --ink-soft: #3d576a;
+    --muted: #6d8798;
+    --line: #d9e6ee;
+    --accent: #0f7fc4;
+    --accent-deep: #0a6aa8;
+    --accent-bright: #1e9fec;
+    --accent-ink: #ffffff;
+    --mint: #0f9d76;
+    --mint-soft: #e4f5ef;
+    --radius: 14px;
+    --shadow-sm: 0 1px 2px rgba(15,31,43,.06), 0 4px 12px -6px rgba(15,31,43,.12);
+    --shadow-lg: 0 1px 2px rgba(15,31,43,.06), 0 24px 48px -20px rgba(15,31,43,.28);
+    --font-head: 'Sora', 'Vazirmatn', system-ui, sans-serif;
+    --font-body: 'IBM Plex Sans', 'Vazirmatn', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'Vazirmatn', monospace;
+    --maxw: 1120px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #081019;
+      --surface: #0f1e2a;
+      --surface-2: #0c1926;
+      --ink: #e8f2f8;
+      --ink-soft: #a9c1cf;
+      --muted: #7893a2;
+      --line: #20323f;
+      --accent: #4fbdf4;
+      --accent-deep: #8ad5f9;
+      --accent-bright: #2ba7ef;
+      --accent-ink: #04131d;
+      --mint: #33c99b;
+      --mint-soft: #0c2a25;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,.45), 0 4px 14px -8px rgba(0,0,0,.6);
+      --shadow-lg: 0 1px 2px rgba(0,0,0,.5), 0 30px 60px -24px rgba(0,0,0,.7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #081019;
+    --surface: #0f1e2a;
+    --surface-2: #0c1926;
+    --ink: #e8f2f8;
+    --ink-soft: #a9c1cf;
+    --muted: #7893a2;
+    --line: #20323f;
+    --accent: #4fbdf4;
+    --accent-deep: #8ad5f9;
+    --accent-bright: #2ba7ef;
+    --accent-ink: #04131d;
+    --mint: #33c99b;
+    --mint-soft: #0c2a25;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.45), 0 4px 14px -8px rgba(0,0,0,.6);
+    --shadow-lg: 0 1px 2px rgba(0,0,0,.5), 0 30px 60px -24px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+
+  :root[data-lang="fa"] {
+    --font-head: 'Vazirmatn', system-ui, sans-serif;
+    --font-body: 'Vazirmatn', system-ui, sans-serif;
+  }
+
+  :root[data-lang="fa"] body { font-size: 16.5px; line-height: 1.85; }
+
+  [data-lang="fa"] .en { display: none !important; }
+  [data-lang="en"] .fa { display: none !important; }
+
+  h1, h2, h3 {
+    font-family: var(--font-head);
+    line-height: 1.18;
+    text-wrap: balance;
+    margin: 0;
+    font-weight: 600;
+  }
+  :root[data-lang="en"] h1,
+  :root[data-lang="en"] h2 { letter-spacing: -0.02em; }
+
+  a { color: inherit; text-decoration: none; }
+
+  p { margin: 0; }
+
+  .wrap {
+    max-width: var(--maxw);
+    margin-inline: auto;
+    padding-inline: clamp(20px, 5vw, 44px);
+  }
+
+  /* ---------- header ---------- */
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    height: 66px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-family: var(--font-head);
+    font-weight: 700;
+    font-size: 1.06rem;
+    letter-spacing: -0.01em;
+  }
+  .brand .mark {
+    width: 28px; height: 28px;
+    background: var(--logo) center / contain no-repeat;
+    border-radius: 50%;
+  }
+  .nav .spacer { flex: 1; }
+  .nav-links {
+    display: flex;
+    gap: 22px;
+    font-size: 0.95rem;
+    color: var(--ink-soft);
+  }
+  .nav-links a:hover { color: var(--accent-deep); }
+
+  .icon-btn {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--ink-soft);
+    height: 38px;
+    min-width: 38px;
+    padding-inline: 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-family: var(--font-body);
+    font-size: 0.85rem;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: border-color .15s, color .15s, background .15s;
+  }
+  .icon-btn:hover { border-color: var(--accent); color: var(--accent-deep); }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    font-family: var(--font-body);
+    font-weight: 600;
+    font-size: 0.98rem;
+    padding: 12px 22px;
+    border-radius: 11px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: transform .15s ease, box-shadow .2s ease, background .15s;
+    white-space: nowrap;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: var(--accent-ink);
+    box-shadow: var(--shadow-sm);
+  }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+  .btn-ghost {
+    background: transparent;
+    color: var(--ink);
+    border-color: var(--line);
+  }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent-deep); }
+  .btn-sm { padding: 9px 15px; font-size: 0.9rem; border-radius: 9px; }
+
+  header .btn { display: none; }
+  @media (min-width: 720px) { header .btn { display: inline-flex; } }
+
+  /* ---------- hero ---------- */
+  .hero {
+    display: grid;
+    gap: clamp(36px, 6vw, 72px);
+    padding-top: clamp(48px, 8vw, 96px);
+    padding-bottom: clamp(48px, 8vw, 90px);
+    align-items: center;
+  }
+  @media (min-width: 940px) {
+    .hero { grid-template-columns: 1.05fr 0.95fr; }
+  }
+
+  .eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent-deep);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    padding: 6px 12px;
+    border-radius: 999px;
+  }
+  :root[data-lang="fa"] .eyebrow { letter-spacing: 0; text-transform: none; font-size: 0.85rem; }
+
+  .hero h1 {
+    font-size: clamp(2.1rem, 5.4vw, 3.4rem);
+    font-weight: 700;
+    margin: 22px 0 0;
+  }
+  .hero h1 .hl {
+    color: var(--accent-deep);
+    background: linear-gradient(transparent 62%, color-mix(in srgb, var(--accent) 24%, transparent) 62%);
+  }
+  .hero .lead {
+    margin-top: 20px;
+    font-size: 1.12rem;
+    color: var(--ink-soft);
+    max-width: 44ch;
+  }
+  .hero-cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 30px;
+  }
+  .hero-note {
+    margin-top: 18px;
+    font-size: 0.9rem;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .hero-note .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); flex: none; }
+
+  /* ---------- telegram mock ---------- */
+  .tg {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    max-width: 380px;
+    width: 100%;
+    margin-inline: auto;
+  }
+  .tg-head {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 13px 16px;
+    background: linear-gradient(120deg, var(--accent-deep), var(--accent));
+    color: #fff;
+  }
+  .tg-head .av {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    background: #fff var(--logo) center / cover no-repeat;
+  }
+  .tg-head .who { font-family: var(--font-head); font-weight: 600; font-size: 0.95rem; line-height: 1.2; }
+  .tg-head .st { font-size: 0.75rem; opacity: .8; }
+  .tg-body {
+    padding: 18px 16px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background:
+      radial-gradient(circle at 20% 10%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 40%),
+      var(--surface-2);
+  }
+  .bubble {
+    align-self: start;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    padding: 10px 13px;
+    border-radius: 4px 14px 14px 14px;
+    font-size: 0.9rem;
+    line-height: 1.55;
+    max-width: 88%;
+    box-shadow: var(--shadow-sm);
+  }
+  :root[dir="rtl"] .bubble { border-radius: 14px 4px 14px 14px; }
+  .bubble .u { color: var(--muted); font-size: 0.8rem; }
+  .bubble code {
+    font-family: var(--font-mono);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent-deep);
+    padding: 1px 5px;
+    border-radius: 5px;
+    font-size: 0.82em;
+  }
+  .tg-kb {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+    margin-top: 4px;
+  }
+  .tg-btn {
+    background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+    color: var(--accent-deep);
+    border-radius: 9px;
+    padding: 9px 8px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-align: center;
+  }
+  .tg-btn.wide { grid-column: 1 / -1; }
+
+  /* ---------- section scaffold ---------- */
+  section { padding-block: clamp(56px, 9vw, 104px); }
+  .section-head { max-width: 52ch; margin-bottom: clamp(34px, 5vw, 54px); }
+  .section-head .kicker {
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent-deep);
+  }
+  :root[data-lang="fa"] .section-head .kicker { letter-spacing: 0; text-transform: none; }
+  .section-head h2 {
+    font-size: clamp(1.7rem, 4vw, 2.5rem);
+    margin-top: 12px;
+  }
+  .section-head p {
+    margin-top: 14px;
+    color: var(--ink-soft);
+    font-size: 1.05rem;
+  }
+
+  .band { background: var(--surface); border-block: 1px solid var(--line); }
+
+  /* ---------- why cards ---------- */
+  .why-grid {
+    display: grid;
+    gap: 18px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+  .why-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 26px 24px;
+    box-shadow: var(--shadow-sm);
+  }
+  .band .why-card { background: var(--surface-2); }
+  .why-card .ic {
+    width: 42px; height: 42px;
+    border-radius: 11px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent-deep);
+    display: grid; place-items: center;
+    font-size: 20px;
+    margin-bottom: 16px;
+  }
+  .why-card h3 { font-size: 1.14rem; margin-bottom: 8px; }
+  .why-card p { color: var(--ink-soft); font-size: 0.96rem; }
+
+  /* ---------- features ---------- */
+  .feat {
+    display: grid;
+    gap: 22px;
+    padding: 30px 0;
+    border-top: 1px solid var(--line);
+    align-items: start;
+  }
+  .feat:last-child { border-bottom: 1px solid var(--line); }
+  @media (min-width: 820px) {
+    .feat { grid-template-columns: 66px 1.15fr 1fr; gap: 30px; }
+  }
+  .feat .num {
+    font-family: var(--font-mono);
+    font-size: 1.5rem;
+    font-weight: 500;
+    color: var(--accent);
+  }
+  .feat h3 { font-size: 1.28rem; }
+  .feat .desc { margin-top: 10px; color: var(--ink-soft); font-size: 1rem; }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
+  .chip {
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 5px 11px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--ink-soft);
+  }
+  .band .chip { background: var(--surface); }
+  .feat .aside {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px 16px;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.7;
+    color: var(--ink-soft);
+    overflow-x: auto;
+  }
+  .band .feat .aside { background: var(--surface); }
+  .feat .aside .k { color: var(--accent-deep); }
+  .feat .aside .c { color: var(--mint); }
+  :root[data-lang="fa"] .feat .aside { font-family: var(--font-mono); direction: ltr; text-align: left; }
+
+  .builder-callout {
+    margin-top: 34px;
+    background: linear-gradient(130deg, color-mix(in srgb, var(--accent) 16%, var(--surface)), var(--surface));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+    border-radius: var(--radius);
+    padding: 28px 26px;
+    display: grid;
+    gap: 8px;
+  }
+  .builder-callout h3 { font-size: 1.2rem; }
+  .builder-callout p { color: var(--ink-soft); font-size: 0.98rem; max-width: 62ch; }
+  .builder-callout .tag {
+    align-self: start;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--accent-deep);
+  }
+  :root[data-lang="fa"] .builder-callout .tag { letter-spacing: 0; text-transform: none; }
+
+  /* ---------- steps ---------- */
+  .steps { display: grid; gap: 16px; }
+  @media (min-width: 760px) { .steps { grid-template-columns: repeat(2, 1fr); } }
+  .step {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 24px 22px;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .step .s-num {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--accent-deep);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    width: 30px; height: 30px;
+    display: grid; place-items: center;
+    border-radius: 8px;
+  }
+  .step h3 { font-size: 1.1rem; }
+  .step p { color: var(--ink-soft); font-size: 0.95rem; }
+  .step .mono {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: var(--ink-soft);
+    direction: ltr;
+    text-align: left;
+    overflow-x: auto;
+  }
+  .step .mono .k { color: var(--accent-deep); }
+
+  /* ---------- pricing ---------- */
+  .price-wrap {
+    display: grid;
+    gap: 20px;
+    grid-template-columns: 1fr;
+    max-width: 720px;
+  }
+  @media (min-width: 720px) { .price-wrap { grid-template-columns: 0.85fr 1.15fr; } }
+
+  .price-card {
+    border-radius: 18px;
+    padding: 30px 28px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+  }
+  .price-card.trial {
+    background: var(--mint-soft);
+    border-color: color-mix(in srgb, var(--mint) 34%, transparent);
+  }
+  .price-card .plan-name {
+    font-family: var(--font-head);
+    font-weight: 600;
+    font-size: 1.05rem;
+  }
+  .price-card .amt {
+    font-family: var(--font-head);
+    font-weight: 700;
+    font-size: 2.1rem;
+    margin: 12px 0 2px;
+    letter-spacing: -0.01em;
+  }
+  .price-card.trial .amt { color: var(--mint); }
+  .price-card .per { color: var(--muted); font-size: 0.9rem; }
+  .price-card ul {
+    list-style: none;
+    padding: 0;
+    margin: 18px 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    font-size: 0.94rem;
+    color: var(--ink-soft);
+  }
+  .price-card li { display: flex; gap: 9px; align-items: start; }
+  .price-card li::before {
+    content: "✓";
+    color: var(--accent-deep);
+    font-weight: 700;
+    flex: none;
+  }
+  .price-card.trial li::before { color: var(--mint); }
+  .price-card .btn { margin-top: 22px; width: 100%; }
+
+  .pay-note {
+    margin-top: 22px;
+    font-size: 0.9rem;
+    color: var(--muted);
+    max-width: 60ch;
+  }
+  .pay-note strong { color: var(--ink-soft); font-weight: 600; }
+
+  /* ---------- faq ---------- */
+  .faq { display: grid; gap: 4px; max-width: 800px; }
+  details {
+    border-bottom: 1px solid var(--line);
+    padding: 18px 4px;
+  }
+  details summary {
+    cursor: pointer;
+    font-family: var(--font-head);
+    font-weight: 600;
+    font-size: 1.04rem;
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: center;
+  }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::after {
+    content: "+";
+    color: var(--accent);
+    font-size: 1.3rem;
+    font-weight: 400;
+    transition: transform .2s;
+    flex: none;
+  }
+  details[open] summary::after { transform: rotate(45deg); }
+  details p { margin-top: 12px; color: var(--ink-soft); font-size: 0.97rem; }
+
+  /* ---------- final cta ---------- */
+  .final {
+    text-align: center;
+    background: linear-gradient(150deg, var(--accent-deep), var(--accent));
+    color: #fff;
+    border-radius: 22px;
+    padding: clamp(40px, 7vw, 66px) 28px;
+    box-shadow: var(--shadow-lg);
+  }
+  .final h2 { font-size: clamp(1.7rem, 4vw, 2.4rem); color: #fff; }
+  .final p { margin: 14px auto 0; max-width: 46ch; color: rgba(255,255,255,.86); }
+  .final .btn {
+    margin-top: 26px;
+    background: #fff;
+    color: var(--accent-deep);
+  }
+  .final .btn:hover { transform: translateY(-2px); box-shadow: 0 20px 40px -16px rgba(0,0,0,.4); }
+
+  footer {
+    padding: 40px 0 56px;
+    color: var(--muted);
+    font-size: 0.86rem;
+    text-align: center;
+  }
+  footer .frow { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; margin-bottom: 12px; }
+  footer a:hover { color: var(--accent-deep); }
+
+  /* ---------- reveal ---------- */
+  .reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s ease, transform .6s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .reveal { opacity: 1; transform: none; transition: none; }
+    .btn, .btn-primary:hover, .final .btn:hover { transition: none; transform: none; }
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <span>easymakebot</span>
+    </div>
+    <div class="spacer"></div>
+    <nav class="nav-links">
+      <a href="#why"><span class="fa">چرا</span><span class="en">Why</span></a>
+      <a href="#features"><span class="fa">امکانات</span><span class="en">Features</span></a>
+      <a href="#tutorial"><span class="fa">آموزش</span><span class="en">Tutorial</span></a>
+      <a href="#pricing"><span class="fa">هزینه</span><span class="en">Pricing</span></a>
+    </nav>
+    <button class="icon-btn" id="langBtn" type="button" aria-label="Switch language">
+      <span class="fa">EN</span><span class="en">فارسی</span>
+    </button>
+    <button class="icon-btn" id="themeBtn" type="button" aria-label="Toggle theme">
+      <span id="themeIcon">◐</span>
+    </button>
+    <a class="btn btn-primary btn-sm" href="https://t.me/easymakebot" target="_blank" rel="noopener">
+      <span class="fa">شروع در تلگرام</span><span class="en">Open in Telegram</span>
+    </a>
+  </div>
+</header>
+
+<main>
+  <div class="wrap hero">
+    <div>
+      <span class="eyebrow">
+        <span class="fa">بدون کدنویسی · داخل خودِ تلگرام</span>
+        <span class="en">No code · Right inside Telegram</span>
+      </span>
+
+      <h1 class="fa">ربات تلگرامت را <span class="hl">در چند دقیقه</span> بساز، نه چند هفته</h1>
+      <h1 class="en">Build your Telegram bot in <span class="hl">minutes</span>, not weeks</h1>
+
+      <p class="lead fa">
+        easymakebot یک ربات است که با آن ربات می‌سازی. توکن را از BotFather می‌گیری،
+        از یک منوی ساده ابزارها را می‌چینی و ربات‌ات همان‌جا روی سرور ما زنده می‌شود —
+        دستور، فروشگاه، عضویت اجباری، پیام همگانی و سازندهٔ بصری.
+      </p>
+      <p class="lead en">
+        easymakebot is a bot that builds bots. Paste your BotFather token, assemble
+        your bot from a simple tools menu, and it goes live on our server right there —
+        commands, a shop, forced-join, broadcasts and a visual builder.
+      </p>
+
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="https://t.me/easymakebot" target="_blank" rel="noopener">
+          <span class="fa">رایگان شروع کن</span><span class="en">Start free</span>
+        </a>
+        <a class="btn btn-ghost" href="#tutorial">
+          <span class="fa">ببین چطور کار می‌کند</span><span class="en">See how it works</span>
+        </a>
+      </div>
+
+      <p class="hero-note">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="fa">۷۲ ساعت آزمایش رایگان — بدون کارت، بدون نصب چیزی.</span>
+        <span class="en">72-hour free trial — no card, nothing to install.</span>
+      </p>
+    </div>
+
+    <div class="tg" role="img" aria-label="Example chat with the easymakebot bot on Telegram">
+      <div class="tg-head">
+        <span class="av" aria-hidden="true"></span>
+        <span>
+          <span class="who">easymakebot</span><br>
+          <span class="st fa">ربات · آنلاین</span><span class="st en">bot · online</span>
+        </span>
+      </div>
+      <div class="tg-body">
+        <div class="bubble">
+          <span class="u">/start</span><br>
+          <span class="fa">👋 خوش آمدی! شناسهٔ تو: <code>128500419</code><br>یک ربات بساز یا ربات‌های قبلی‌ات را ببین.</span>
+          <span class="en">👋 Welcome! Your ID: <code>128500419</code><br>Create a bot or view the ones you already have.</span>
+        </div>
+        <div class="tg-kb">
+          <span class="tg-btn">🤖 <span class="fa">ربات‌های من</span><span class="en">My Bots</span></span>
+          <span class="tg-btn">➕ <span class="fa">ربات جدید</span><span class="en">New Bot</span></span>
+        </div>
+        <div class="bubble">
+          <span class="fa">محیط ساخت باز شد. از منوی «ابزارهای ساخت و ویرایش» انتخاب کن:</span>
+          <span class="en">Build environment ready. Pick from the "Build &amp; Edit Tools" menu:</span>
+        </div>
+        <div class="tg-kb">
+          <span class="tg-btn">1️⃣ <span class="fa">تعریف دستور</span><span class="en">Define Command</span></span>
+          <span class="tg-btn">2️⃣ <span class="fa">عضویت اجباری</span><span class="en">Force Join</span> 🔓</span>
+          <span class="tg-btn">3️⃣ <span class="fa">پیام همگانی</span><span class="en">Broadcast</span></span>
+          <span class="tg-btn">4️⃣ <span class="fa">لیست محتوا</span><span class="en">Content List</span></span>
+          <span class="tg-btn wide">5️⃣ <span class="fa">فروشگاه</span><span class="en">Shop</span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WHY -->
+  <section id="why" class="band">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker fa">چرا easymakebot</span><span class="kicker en">Why easymakebot</span>
+        <h2 class="fa">ساده، چون قرار نیست برنامه‌نویس باشی</h2>
+        <h2 class="en">Simple, because you were never meant to be a developer</h2>
+        <p class="fa">
+          ساختن ربات معمولاً یعنی سرور، هاست، کد و نگهداری. اینجا فقط چند پیام در تلگرام است.
+        </p>
+        <p class="en">
+          A bot usually means a server, hosting, code and upkeep. Here it's a few messages in Telegram.
+        </p>
+      </div>
+
+      <div class="why-grid">
+        <div class="why-card reveal">
+          <div class="ic" aria-hidden="true">⌨️</div>
+          <h3 class="fa">بدون یک خط کد</h3><h3 class="en">Not one line of code</h3>
+          <p class="fa">همه‌چیز با دکمه و پیام تنظیم می‌شود. اگر بلدی با تلگرام چت کنی، بلدی ربات بسازی.</p>
+          <p class="en">Everything is set with buttons and messages. If you can chat on Telegram, you can build a bot.</p>
+        </div>
+        <div class="why-card reveal">
+          <div class="ic" aria-hidden="true">⚡</div>
+          <h3 class="fa">چند دقیقه تا انتشار</h3><h3 class="en">Minutes to live</h3>
+          <p class="fa">توکن را می‌دهی، دستورها را می‌سازی، «زنده کن» را می‌زنی. میزبانی و اجرای ربات با ماست.</p>
+          <p class="en">Give the token, add commands, tap "Go live". Hosting and running the bot is on us.</p>
+        </div>
+        <div class="why-card reveal">
+          <div class="ic" aria-hidden="true">🪙</div>
+          <h3 class="fa">مقرون‌به‌صرفه</h3><h3 class="en">Easy on the wallet</h3>
+          <p class="fa">۷۲ ساعت اول رایگان است. بعد فقط یک اشتراک ماهانهٔ ساده — نه هزینهٔ سرور، نه قرارداد توسعه.</p>
+          <p class="en">The first 72 hours are free. After that just one simple monthly plan — no server bill, no dev contract.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section id="features">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker fa">امکانات</span><span class="kicker en">Features</span>
+        <h2 class="fa">پنج ابزار، دقیقاً به همین ترتیب داخل ربات</h2>
+        <h2 class="en">Five tools, in the exact order you meet them in the bot</h2>
+        <p class="fa">هر ربات که می‌سازی به این منو دسترسی دارد. لازم نیست همه را استفاده کنی — فقط آن‌هایی که می‌خواهی.</p>
+        <p class="en">Every bot you build gets this menu. Use only the ones you need.</p>
+      </div>
+
+      <div class="feat reveal">
+        <div class="num">01</div>
+        <div>
+          <h3 class="fa">تعریف دستور</h3><h3 class="en">Define Command</h3>
+          <p class="desc fa">
+            دستورهای ربات‌ات را می‌سازی — مثل <code>/start</code> یا <code>/help</code>. برای
+            <code>/start</code> یک ویزارد کوتاه می‌پرسد: پیام خوش‌آمد، آیدی ادمین برای تماس و… .
+            لیست دستورها به‌صورت خودکار در منوی تلگرام ربات‌ات ثبت می‌شود.
+          </p>
+          <p class="desc en">
+            Create your bot's commands — like <code>/start</code> or <code>/help</code>. For
+            <code>/start</code> a short wizard asks for the welcome text, an admin contact handle and more.
+            Your command list is synced into the bot's Telegram menu automatically.
+          </p>
+          <div class="chips">
+            <span class="chip fa">ویزارد /start</span><span class="chip en">/start wizard</span>
+            <span class="chip fa">همگام‌سازی خودکار منو</span><span class="chip en">Auto menu sync</span>
+            <span class="chip fa">دکمهٔ «نمایش دستورها»</span><span class="chip en">"Show commands"</span>
+          </div>
+        </div>
+        <div class="aside">
+          <span class="k">command</span> = <span class="c">/start</span><br>
+          welcome  = "به فروشگاه من خوش اومدی"<br>
+          admin    = <span class="c">@my_username</span><br>
+          <span class="k">synced</span> → Telegram menu ✓
+        </div>
+      </div>
+
+      <div class="feat reveal">
+        <div class="num">02</div>
+        <div>
+          <h3 class="fa">عضویت اجباری</h3><h3 class="en">Force Join</h3>
+          <p class="desc fa">
+            کاربر تا وقتی عضو کانال‌های تو نشده، نمی‌تواند از ربات استفاده کند. چند کانال اضافه کن،
+            و با یک کلید قفل (🔒 / 🔓) این شرط را روی <code>/start</code> روشن یا خاموش کن.
+          </p>
+          <p class="desc en">
+            Users can't use the bot until they've joined your channels. Add one or more channels,
+            then flip a lock switch (🔒 / 🔓) to turn the gate on <code>/start</code> on or off.
+          </p>
+          <div class="chips">
+            <span class="chip fa">چند کانال</span><span class="chip en">Multiple channels</span>
+            <span class="chip fa">کلید روشن/خاموش</span><span class="chip en">On/off toggle</span>
+            <span class="chip fa">بررسی خودکار عضویت</span><span class="chip en">Auto membership check</span>
+          </div>
+        </div>
+        <div class="aside">
+          channels = [ <span class="c">@my_channel</span>, <span class="c">@news</span> ]<br>
+          gate on <span class="k">/start</span> → <span class="c">ENABLED 🔒</span><br>
+          not joined? → "Join, then tap ✅"
+        </div>
+      </div>
+
+      <div class="feat reveal">
+        <div class="num">03</div>
+        <div>
+          <h3 class="fa">پیام همگانی</h3><h3 class="en">Broadcast</h3>
+          <p class="desc fa">
+            یک دستور می‌سازی که با آن هر پیامی — متن، عکس، فایل — را برای همهٔ کاربران ربات‌ات می‌فرستی.
+            برای اطلاع‌رسانی، تخفیف و به‌روزرسانی.
+          </p>
+          <p class="desc en">
+            Create a command that sends any message — text, photo, file — to every user of your bot.
+            For announcements, discounts and updates.
+          </p>
+          <div class="chips">
+            <span class="chip fa">به همهٔ کاربران</span><span class="chip en">To all subscribers</span>
+            <span class="chip fa">متن / عکس / فایل</span><span class="chip en">Text / photo / file</span>
+          </div>
+        </div>
+        <div class="aside">
+          owner sends → <span class="c">"۲۰٪ تخفیف امشب"</span><br>
+          easymakebot → 1,240 users ✓<br>
+          delivered: 1,231 · blocked: 9
+        </div>
+      </div>
+
+      <div class="feat reveal">
+        <div class="num">04</div>
+        <div>
+          <h3 class="fa">لیست محتوا</h3><h3 class="en">Content List</h3>
+          <p class="desc fa">
+            یک کاتالوگ دسته‌بندی‌شده (والد/فرزند) از محتوا یا محصولات. دستی اضافه کن یا فایل اکسل
+            نمونه را بگیر، پُر کن و یک‌جا بارگذاری کن. هر آیتم می‌تواند «برای فروش» با قیمت و دکمهٔ خرید باشد.
+          </p>
+          <p class="desc en">
+            A categorized (parent/child) catalog of content or products. Add items by hand, or download the
+            sample Excel, fill it in and bulk-upload. Any item can be marked "for sale" with a price and a Buy button.
+          </p>
+          <div class="chips">
+            <span class="chip fa">دسته‌بندی تودرتو</span><span class="chip en">Nested categories</span>
+            <span class="chip fa">ورود/خروج اکسل</span><span class="chip en">Excel import / export</span>
+            <span class="chip fa">فیزیکی · دیجیتال · دسترسی</span><span class="chip en">Physical · digital · access</span>
+          </div>
+        </div>
+        <div class="aside">
+          📁 <span class="k">دوره‌ها</span><br>
+          &nbsp;&nbsp;└ 🎬 پایتون مقدماتی — <span class="c">۲۹۰٬۰۰۰ ﷼</span> · Buy<br>
+          &nbsp;&nbsp;└ 🎬 جاوااسکریپت<br>
+          📁 <span class="k">کتاب‌ها</span> · upload.xlsx ✓
+        </div>
+      </div>
+
+      <div class="feat reveal">
+        <div class="num">05</div>
+        <div>
+          <h3 class="fa">فروشگاه</h3><h3 class="en">Shop</h3>
+          <p class="desc fa">
+            محصولات مستقل، سبد خرید، سفارش و فاکتور PDF. درگاه‌ها را خودت وصل می‌کنی:
+            زرین‌پال، کارت‌به‌کارت، استرایپ (بین‌المللی)، کیف‌پول کریپتو و TON. سفارش‌های اخیر را همان‌جا می‌بینی.
+          </p>
+          <p class="desc en">
+            Standalone products, a cart, orders and PDF invoices. You connect the gateways yourself:
+            Zarinpal, card-to-card, Stripe (international), a crypto wallet and TON. Recent orders show up right there.
+          </p>
+          <div class="chips">
+            <span class="chip fa">زرین‌پال</span><span class="chip en">Zarinpal</span>
+            <span class="chip fa">کارت‌به‌کارت</span><span class="chip en">Card-to-card</span>
+            <span class="chip fa">استرایپ</span><span class="chip en">Stripe</span>
+            <span class="chip fa">کریپتو · TON</span><span class="chip en">Crypto · TON</span>
+            <span class="chip fa">فاکتور PDF</span><span class="chip en">PDF invoice</span>
+          </div>
+        </div>
+        <div class="aside">
+          product: "اشتراک ۱ ماهه" · <span class="c">access</span><br>
+          price: <span class="c">۹۹٬۰۰۰ تومان</span><br>
+          pay: Zarinpal → paid ✓ → invoice.pdf<br>
+          fulfilled: access granted
+        </div>
+      </div>
+
+      <div class="builder-callout reveal">
+        <span class="tag fa">علاوه بر این</span><span class="tag en">On top of that</span>
+        <h3 class="fa">🎨 سازندهٔ بصری (Mini App)</h3>
+        <h3 class="en">🎨 Visual Builder (Mini App)</h3>
+        <p class="fa">
+          اگر ترجیح می‌دهی به‌جای چت، فلوی ربات را ببینی: یک بوم درگ‌اند‌دراپ داخل تلگرام باز می‌شود و
+          فلوی <code>/start</code> را بلوک‌به‌بلوک می‌چینی — پیام، عضویت اجباری، راهنما و ویدیو، لیست محتوا،
+          فروشگاه و پیام همگانی.
+        </p>
+        <p class="en">
+          Prefer to see your bot's flow instead of chatting it: a drag-and-drop canvas opens inside Telegram
+          and you assemble the <code>/start</code> flow block by block — message, forced-join, guide &amp; video,
+          content list, shop and broadcast.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- TUTORIAL -->
+  <section id="tutorial" class="band">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker fa">آموزش</span><span class="kicker en">Tutorial</span>
+        <h2 class="fa">از صفر تا ربات زنده، در چهار قدم</h2>
+        <h2 class="en">From zero to a live bot, in four steps</h2>
+        <p class="fa">هر قدم فقط چند پیام در تلگرام است. هر جای کار گیر کردی، <code>/cancel</code> بزن.</p>
+        <p class="en">Each step is just a few messages in Telegram. Stuck anywhere? Send <code>/cancel</code>.</p>
+      </div>
+
+      <div class="steps">
+        <div class="step reveal">
+          <span class="s-num">1</span>
+          <h3 class="fa">به easymakebot پیام بده</h3><h3 class="en">Message easymakebot</h3>
+          <p class="fa">
+            <code>/start</code> را بفرست. یک‌بار (اختیاری) شمارهٔ موبایلت را می‌پرسد تا راهنما و ویدیو را
+            به زبان خودت نشانت دهد.
+          </p>
+          <p class="en">
+            Send <code>/start</code>. It asks once (optional) for your phone number so it can show the
+            guide and video in your language.
+          </p>
+          <div class="mono"><span class="k">you</span> → /start &nbsp;·&nbsp; <span class="k">bot</span> → 👋 + [ 🤖 My Bots ] [ ➕ New Bot ]</div>
+        </div>
+
+        <div class="step reveal">
+          <span class="s-num">2</span>
+          <h3 class="fa">ربات جدید بساز</h3><h3 class="en">Create a new bot</h3>
+          <p class="fa">
+            «ربات جدید» را بزن و توکنی را که از <code>@BotFather</code> گرفتی بفرست. توکن بررسی می‌شود و
+            ربات‌ات ثبت می‌شود.
+          </p>
+          <p class="en">
+            Tap "New Bot" and send the token you got from <code>@BotFather</code>. The token is validated
+            and your bot is registered.
+          </p>
+          <div class="mono"><span class="k">you</span> → 7712…:AAF… &nbsp;·&nbsp; <span class="k">bot</span> → ✓ "@my_shop_bot" added</div>
+        </div>
+
+        <div class="step reveal">
+          <span class="s-num">3</span>
+          <h3 class="fa">ابزارها را بچین</h3><h3 class="en">Assemble the tools</h3>
+          <p class="fa">
+            ربات‌ات را انتخاب کن تا وارد محیط ساخت شوی. از «ابزارهای ساخت و ویرایش» دستور، عضویت اجباری،
+            لیست محتوا یا فروشگاه را اضافه کن — یا سازندهٔ بصری را باز کن.
+          </p>
+          <p class="en">
+            Select your bot to enter its build environment. From "Build &amp; Edit Tools" add commands,
+            forced-join, a content list or a shop — or open the Visual Builder.
+          </p>
+          <div class="mono"><span class="k">menu</span> → 1️⃣ Command · 2️⃣ Force Join · … · 5️⃣ Shop</div>
+        </div>
+
+        <div class="step reveal">
+          <span class="s-num">4</span>
+          <h3 class="fa">زنده کن</h3><h3 class="en">Go live</h3>
+          <p class="fa">
+            <code>/live</code> را بزن. با آزمایش رایگان ۷۲ ساعته ربات‌ات همین حالا روی تلگرام بالا می‌آید؛
+            برای ماندگاری، پلن ماهانه را بگیر. اجرا و میزبانی با ماست.
+          </p>
+          <p class="en">
+            Send <code>/live</code>. The 72-hour free trial brings your bot up on Telegram right now;
+            to keep it, pick the monthly plan. Running and hosting is on us.
+          </p>
+          <div class="mono"><span class="k">/live</span> → 🧪 Trial (72h) &nbsp;|&nbsp; 💳 Monthly — 30 days</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRICING -->
+  <section id="pricing">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker fa">هزینه</span><span class="kicker en">Pricing</span>
+        <h2 class="fa">اول امتحان کن، بعد اگر خواستی بمان</h2>
+        <h2 class="en">Try it first, stay only if you want</h2>
+        <p class="fa">یک پلن، بدون پیچیدگی. تا وقتی ربات زنده نباشد چیزی پرداخت نمی‌کنی.</p>
+        <p class="en">One plan, no complexity. You pay nothing until your bot is live.</p>
+      </div>
+
+      <div class="price-wrap">
+        <div class="price-card trial reveal">
+          <div class="plan-name fa">آزمایش رایگان</div><div class="plan-name en">Free trial</div>
+          <div class="amt fa">۰</div><div class="amt en">Free</div>
+          <div class="per fa">۷۲ ساعت، یک‌بار برای هر ربات</div>
+          <div class="per en">72 hours, once per bot</div>
+          <ul>
+            <li class="fa">ربات واقعی روی تلگرام بالا می‌آید</li><li class="en">Your real bot goes live on Telegram</li>
+            <li class="fa">همهٔ ابزارها باز است</li><li class="en">Every tool unlocked</li>
+            <li class="fa">بدون کارت بانکی</li><li class="en">No bank card needed</li>
+          </ul>
+          <a class="btn btn-ghost" href="https://t.me/easymakebot" target="_blank" rel="noopener">
+            <span class="fa">شروع رایگان</span><span class="en">Start free</span>
+          </a>
+        </div>
+
+        <div class="price-card reveal">
+          <div class="plan-name fa">پلن ماهانه</div><div class="plan-name en">Monthly plan</div>
+          <div class="amt fa">۴۹۰٬۰۰۰ <span style="font-size:1rem;font-weight:600;color:var(--muted)">تومان</span></div>
+          <div class="amt en">490,000 <span style="font-size:1rem;font-weight:600;color:var(--muted)">Toman</span></div>
+          <div class="per fa">۳۰ روز فعال بودن ربات · بین‌المللی: ۱۰ دلار</div>
+          <div class="per en">30 days of your bot staying live · international: $10</div>
+          <ul>
+            <li class="fa">ربات‌ات بدون وقفه روی تلگرام می‌ماند</li><li class="en">Your bot stays up on Telegram, uninterrupted</li>
+            <li class="fa">میزبانی، اجرا و به‌روزرسانی با ما</li><li class="en">Hosting, running and updates on us</li>
+            <li class="fa">تمدید هر وقت خواستی</li><li class="en">Renew whenever you like</li>
+            <li class="fa">اگر تمدید نکنی، ساخته‌هایت پاک نمی‌شود</li><li class="en">If you don't renew, your build isn't deleted</li>
+          </ul>
+          <a class="btn btn-primary" href="https://t.me/easymakebot" target="_blank" rel="noopener">
+            <span class="fa">زنده کردن ربات</span><span class="en">Make my bot live</span>
+          </a>
+        </div>
+      </div>
+
+      <p class="pay-note fa">
+        <strong>پرداخت پلن:</strong> سازندگان داخل ایران زرین‌پال می‌بینند؛ خارج از ایران کارت
+        (ویزا/مسترکارت) و TON. &nbsp;— &nbsp;<strong>فروشگاه خودِ ربات‌ات</strong> جداست و می‌تواند
+        زرین‌پال، کارت‌به‌کارت، استرایپ، کریپتو و TON را هم‌زمان داشته باشد.
+      </p>
+      <p class="pay-note en">
+        <strong>Paying for the plan:</strong> creators inside Iran see Zarinpal; outside Iran, card
+        (Visa/Mastercard) and TON. &nbsp;— &nbsp;<strong>Your bot's own shop</strong> is separate and can
+        offer Zarinpal, card-to-card, Stripe, crypto and TON at the same time.
+      </p>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="band">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker fa">سؤال‌های رایج</span><span class="kicker en">FAQ</span>
+        <h2 class="fa">قبل از شروع، این‌ها را بدان</h2>
+        <h2 class="en">A few things to know before you start</h2>
+      </div>
+
+      <div class="faq reveal">
+        <details>
+          <summary><span class="fa">واقعاً بدون کدنویسی؟</span><span class="en">Really no coding?</span></summary>
+          <p class="fa">بله. همهٔ ساخت‌وساز با دکمه و پیام داخل تلگرام انجام می‌شود. نه ادیتور کد، نه ترمینال.</p>
+          <p class="en">Yes. All the building happens with buttons and messages inside Telegram. No code editor, no terminal.</p>
+        </details>
+        <details>
+          <summary><span class="fa">برای شروع چه چیزی لازم دارم؟</span><span class="en">What do I need to start?</span></summary>
+          <p class="fa">فقط یک اکانت تلگرام و یک توکن ربات از <code>@BotFather</code> (ساختش رایگان و یک‌دقیقه‌ای است).</p>
+          <p class="en">Just a Telegram account and a bot token from <code>@BotFather</code> (free, takes a minute).</p>
+        </details>
+        <details>
+          <summary><span class="fa">ربات من کجا اجرا می‌شود؟</span><span class="en">Where does my bot run?</span></summary>
+          <p class="fa">روی سرور easymakebot. هر ربات ساخته‌شده حلقهٔ دریافت پیام خودش را دارد و ما آن را زنده نگه می‌داریم.</p>
+          <p class="en">On easymakebot's server. Each built bot has its own polling loop and we keep it live for you.</p>
+        </details>
+        <details>
+          <summary><span class="fa">می‌توانم چیزی بفروشم؟</span><span class="en">Can I sell things?</span></summary>
+          <p class="fa">بله. ابزار فروشگاه محصول فیزیکی، دیجیتال و دسترسی/اشتراک را پشتیبانی می‌کند، با سبد خرید، پرداخت و فاکتور PDF.</p>
+          <p class="en">Yes. The Shop tool supports physical, digital and access/membership products, with a cart, payment and PDF invoices.</p>
+        </details>
+        <details>
+          <summary><span class="fa">اگر اشتراک را تمدید نکنم چه می‌شود؟</span><span class="en">What if I don't renew?</span></summary>
+          <p class="fa">ربات از تلگرام آفلاین می‌شود و ابزارهای ویرایش قفل می‌شوند، ولی همهٔ ساخته‌هایت می‌ماند و با پرداخت دوباره برمی‌گردد.</p>
+          <p class="en">The bot goes offline on Telegram and editing locks, but everything you built stays and comes back the moment you pay again.</p>
+        </details>
+        <details>
+          <summary><span class="fa">ربات با کاربران به چه زبانی حرف می‌زند؟</span><span class="en">What language does the bot speak to users?</span></summary>
+          <p class="fa">متن‌هایی که خودت می‌نویسی به هر زبانی که بخواهی. راهنمای داخلی هم بر اساس کد کشور شمارهٔ کاربر فارسی یا انگلیسی می‌شود.</p>
+          <p class="en">Whatever you write it to say, in any language. The built-in guide switches between Persian and English based on the user's phone country code.</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- FINAL CTA -->
+  <section>
+    <div class="wrap">
+      <div class="final reveal">
+        <h2 class="fa">ربات‌ات یک پیام با تو فاصله دارد</h2>
+        <h2 class="en">Your bot is one message away</h2>
+        <p class="fa">easymakebot را در تلگرام باز کن، <code style="background:rgba(255,255,255,.2);padding:1px 6px;border-radius:5px">/start</code> بزن و همین امروز اولین ربات‌ات را زنده کن.</p>
+        <p class="en">Open easymakebot in Telegram, send <code style="background:rgba(255,255,255,.2);padding:1px 6px;border-radius:5px">/start</code>, and put your first bot live today.</p>
+        <a class="btn" href="https://t.me/easymakebot" target="_blank" rel="noopener">
+          <span class="fa">باز کردن ‎@easymakebot</span><span class="en">Open @easymakebot</span>
+        </a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="frow">
+      <a href="#why"><span class="fa">چرا</span><span class="en">Why</span></a>
+      <a href="#features"><span class="fa">امکانات</span><span class="en">Features</span></a>
+      <a href="#tutorial"><span class="fa">آموزش</span><span class="en">Tutorial</span></a>
+      <a href="#pricing"><span class="fa">هزینه</span><span class="en">Pricing</span></a>
+      <a href="admin.html" target="_blank" rel="noopener"><span class="fa">پنل مدیریت</span><span class="en">Admin panel</span></a>
+      <a href="https://t.me/easymakebot" target="_blank" rel="noopener">Telegram</a>
+    </div>
+    <div class="fa">easymakebot — ربات بساز، بدون کدنویسی.</div>
+    <div class="en">easymakebot — build a bot, no code required.</div>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+
+    // ---- language ----
+    function applyLang(lang) {
+      root.setAttribute('data-lang', lang);
+      root.setAttribute('lang', lang);
+      root.setAttribute('dir', lang === 'fa' ? 'rtl' : 'ltr');
+      try { localStorage.setItem('emb-lang', lang); } catch (e) {}
+    }
+    var savedLang = 'fa';
+    try { savedLang = localStorage.getItem('emb-lang') || 'fa'; } catch (e) {}
+    applyLang(savedLang === 'en' ? 'en' : 'fa');
+
+    document.getElementById('langBtn').addEventListener('click', function () {
+      applyLang(root.getAttribute('data-lang') === 'fa' ? 'en' : 'fa');
+    });
+
+    // ---- theme ----
+    var icon = document.getElementById('themeIcon');
+    function applyTheme(mode) {
+      if (mode === 'system') {
+        root.removeAttribute('data-theme');
+        icon.textContent = '◐';
+      } else {
+        root.setAttribute('data-theme', mode);
+        icon.textContent = mode === 'dark' ? '☾' : '☀';
+      }
+      try { localStorage.setItem('emb-theme', mode); } catch (e) {}
+    }
+    var savedTheme = 'system';
+    try { savedTheme = localStorage.getItem('emb-theme') || 'system'; } catch (e) {}
+    applyTheme(savedTheme);
+
+    document.getElementById('themeBtn').addEventListener('click', function () {
+      var cur = root.getAttribute('data-theme');
+      applyTheme(cur === 'dark' ? 'light' : 'dark');
+    });
+
+    // ---- reveal on scroll ----
+    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce || !('IntersectionObserver' in window)) {
+      document.querySelectorAll('.reveal').forEach(function (el) { el.classList.add('in'); });
+    } else {
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); }
+        });
+      }, { threshold: 0.12, rootMargin: '0px 0px -8% 0px' });
+      document.querySelectorAll('.reveal').forEach(function (el) { io.observe(el); });
+    }
+  })();
+</script>
+
+</body>
+</html>

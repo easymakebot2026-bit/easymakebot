@@ -1,0 +1,34 @@
+# Production with Caddy instead of nginx (automatic TLS).
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.caddy.yml up -d
+# (prod.yml still supplies the `backup` service and disables mailpit.)
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+services:
+  nginx:
+    # Disable the nginx service; caddy takes 80/443.
+    profiles: ["disabled"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [wordpress]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - wp_data:/var/www/html:ro
+      # our theme + mu-plugins live as bind-mounts (not in the wp_data volume);
+      # Caddy's file_server needs them to serve theme assets (css/js/fonts).
+      - ./wordpress/wp-content/themes/easymakebot:/var/www/html/wp-content/themes/easymakebot:ro
+      - ./wordpress/wp-content/mu-plugins:/var/www/html/wp-content/mu-plugins:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [edge]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }

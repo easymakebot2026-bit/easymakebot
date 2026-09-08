@@ -1,0 +1,28 @@
+# LOCAL Windows testing override for docker-compose.bot.yml.
+#
+# Skips bot-db and caddy: bot-db would start an empty new Postgres, but the
+# real data already lives in the easymakebot-db container the host-run bot
+# uses (see ../.env's DATABASE_URL) -- this points the containerized bot at
+# that SAME database instead, over host.docker.internal. caddy needs a real
+# public domain + TLS, which local testing doesn't have; the existing
+# cloudflared quick tunnel (pointed at localhost:8081) covers that instead.
+#
+# bot/ is bind-mounted read-only so a restart (no rebuild) picks up any edit
+# made on the host -- e.g. from Docker Desktop's Containers list, the
+# restart icon on the "easymakebot-bot" container.
+#
+# One-time build + start (from the deploy/ directory) -- --no-deps is required:
+# Compose merges depends_on additively across files rather than letting an
+# override clear it, so without --no-deps this still pulls in bot-db (a
+# second, empty Postgres this stack doesn't use).
+#   docker compose --env-file .env.bot -f docker-compose.bot.yml -f docker-compose.bot.local.yml up -d --build --no-deps bot
+
+services:
+  bot:
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:password@host.docker.internal:5433/easymakebot
+      WEBAPP_PORT: "8080"
+    ports:
+      - "8081:8080"
+    volumes:
+      - ../bot:/app/bot:ro

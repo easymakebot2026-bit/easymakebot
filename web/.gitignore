@@ -1,0 +1,25 @@
+# secrets & local state — never commit
+.env
+.env.*
+!.env.example
+
+# runtime data (bind-mounted volumes)
+data/
+backups/
+certs/
+wordpress/wp-config.php
+
+# WordPress core + plugins live in the image / are managed by wp-cli;
+# only our own code is version-controlled:
+wordpress/wp-content/*
+!wordpress/wp-content/mu-plugins/
+!wordpress/wp-content/themes/
+wordpress/wp-content/themes/*
+!wordpress/wp-content/themes/easymakebot/
+wordpress/wp-content/uploads/
+wordpress/wp-content/cache/
+wordpress/wp-content/upgrade/
+
+# editor noise
+.DS_Store
+Thumbs.db
