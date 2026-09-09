@@ -195,20 +195,24 @@ function emb_sms_driver() {
 	if ( ! $d ) {
 		$d = getenv( 'EMB_SMS_DRIVER' ) ?: 'log';
 	}
-	return in_array( $d, array( 'log', 'kavenegar' ), true ) ? $d : 'log';
+	return in_array( $d, array( 'log', 'kavenegar', 'asanak' ), true ) ? $d : 'log';
 }
 
 /**
  * Send a verification code by SMS. Returns bool.
  * Filter `emb_sms_pre_send` ($result, $phone, $code) short-circuits (tests).
  */
-function emb_sms_send( $phone09, $code ) {
+function emb_sms_send( $phone09, $code, $uid = 0 ) {
 	$pre = apply_filters( 'emb_sms_pre_send', null, $phone09, $code );
 	if ( null !== $pre ) {
 		return (bool) $pre;
 	}
-	if ( 'kavenegar' === emb_sms_driver() ) {
+	$driver = emb_sms_driver();
+	if ( 'kavenegar' === $driver ) {
 		return emb_sms_send_kavenegar( $phone09, $code );
+	}
+	if ( 'asanak' === $driver ) {
+		return emb_sms_send_asanak( $phone09, $code, $uid );
 	}
 	// 'log' driver — dev / pre-provisioning
 	$line = gmdate( 'c' ) . "  sms→{$phone09}  code={$code}\n";
@@ -243,6 +247,67 @@ function emb_sms_send_kavenegar( $phone09, $code ) {
 	$ok   = isset( $body['return']['status'] ) && 200 === (int) $body['return']['status'];
 	if ( ! $ok ) {
 		error_log( '[emb-sms] kavenegar rejected: ' . wp_remote_retrieve_body( $res ) );
+	}
+	return $ok;
+}
+
+/**
+ * Asanak (آسانک) — plain sendsms webservice (v2rest, JSON), sent from the
+ * dedicated OTP line (the "source" number). No separate pattern/OTP endpoint
+ * exists in Asanak's webservice — see https://asanak.com/api-docs/sms/single.
+ * Success response shape: {"meta":{"status":200,"message":"success"},"data":[123456]}.
+ * Anything else (including a flat {"status":"..."} error object) is a failure.
+ */
+function emb_sms_send_asanak( $phone09, $code, $uid = 0 ) {
+	$user   = trim( (string) ( get_option( 'emb_sms_asanak_username', '' ) ?: getenv( 'EMB_SMS_ASANAK_USERNAME' ) ) );
+	$pass   = trim( (string) ( get_option( 'emb_sms_asanak_password', '' ) ?: getenv( 'EMB_SMS_ASANAK_PASSWORD' ) ) );
+	$source = trim( (string) ( get_option( 'emb_sms_asanak_source', '' ) ?: getenv( 'EMB_SMS_ASANAK_SOURCE' ) ) );
+	if ( '' === $user || '' === $pass || '' === $source ) {
+		error_log( '[emb-sms] asanak: username/password/source not configured' );
+		return false;
+	}
+	$name = '';
+	if ( $uid ) {
+		$fn   = trim( (string) get_user_meta( (int) $uid, 'first_name', true ) );
+		$ln   = trim( (string) get_user_meta( (int) $uid, 'last_name', true ) );
+		$name = trim( $fn . '  ' . $ln );
+	}
+	$greeting = '' !== $name ? $name : 'کاربر';
+	// Note: Asanak's dedicated OTP line rejects any message containing a link
+	// (error 1014 "This source number can not send link") — no domain/URL here.
+	$message  = sprintf(
+		"%s عزیز:\n کد تآیید خدمت شما:  %s\n\nربات بساز، بدون کد نویسی 😉",
+		$greeting,
+		$code
+	);
+	$payload = wp_json_encode( array(
+		'username'    => $user,
+		'password'    => $pass,
+		'source'      => $source,
+		'destination' => $phone09,
+		'message'     => $message,
+	) );
+	$res = wp_remote_post( 'https://sms.asanak.ir/webservice/v2rest/sendsms', array(
+		'timeout' => 15,
+		'headers' => array(
+			'Content-Type' => 'application/json',
+			'Accept'       => 'application/json',
+		),
+		'body'    => $payload,
+	) );
+	if ( is_wp_error( $res ) ) {
+		error_log( '[emb-sms] asanak: ' . $res->get_error_message() );
+		return false;
+	}
+	$http_code = (int) wp_remote_retrieve_response_code( $res );
+	$body_raw  = wp_remote_retrieve_body( $res );
+	$body      = json_decode( $body_raw, true );
+	// Documented v2 success shape: {"meta":{"status":200,...},"data":[<msg id>,...]}.
+	$ok = ( 200 === $http_code ) && is_array( $body )
+		&& isset( $body['meta']['status'] ) && 200 === (int) $body['meta']['status']
+		&& ! empty( $body['data'] );
+	if ( ! $ok ) {
+		error_log( '[emb-sms] asanak rejected: ' . $body_raw );
 	}
 	return $ok;
 }
@@ -287,7 +352,7 @@ function emb_otp_send( $uid, $channel, $dest, $lang = null ) {
 		return new WP_Error( 'too_many_sends', __( 'درخواست کد زیاد شد. یک ساعت دیگر تلاش کنید.', 'easymakebot' ) );
 	}
 	$code = emb_otp_generate( $uid, $channel, $dest );
-	$sent = ( 'email' === $channel ) ? emb_otp_email( $dest, $code, $lang ) : emb_sms_send( $dest, $code );
+	$sent = ( 'email' === $channel ) ? emb_otp_email( $dest, $code, $lang ) : emb_sms_send( $dest, $code, $uid );
 	if ( ! $sent ) {
 		delete_transient( emb_otp_key( $uid ) );
 		return new WP_Error( 'send_failed', __( 'ارسال کد ناموفق بود. بعداً تلاش کنید.', 'easymakebot' ) );
@@ -583,6 +648,36 @@ function emb_account_content_gate( $content ) {
 	return is_account_page() ? emb_verify_form_html() : $content;
 }
 
+/** Stack the WooCommerce "My Account" nav tabs (پیشخوان/سفارش‌ها/...) one per row —
+ *  the theme's own layout wraps them into uneven, messy rows. CSS-only, scoped to
+ *  the account page, so it can't affect anything else on the site. */
+add_action( 'wp_head', function () {
+	if ( ! function_exists( 'is_account_page' ) || ! is_account_page() ) {
+		return;
+	}
+	?>
+	<style>
+		.woocommerce-MyAccount-navigation ul {
+			display: flex !important;
+			flex-direction: column !important;
+			align-items: stretch !important;
+			gap: 8px !important;
+		}
+		.woocommerce-MyAccount-navigation ul li {
+			width: 100% !important;
+			margin: 0 !important;
+			list-style: none !important;
+		}
+		.woocommerce-MyAccount-navigation ul li a {
+			display: block !important;
+			width: 100% !important;
+			box-sizing: border-box !important;
+			text-align: center !important;
+		}
+	</style>
+	<?php
+} );
+
 function emb_verify_form_html() {
 	if ( ! is_user_logged_in() ) {
 		return '';
@@ -596,9 +691,12 @@ function emb_verify_form_html() {
 	list( $channel, $dest ) = emb_user_otp_target( $uid );
 	$mask = emb_otp_mask( $channel, $dest );
 	$en   = 'en' === emb_current_lang();
+	// Isolate the masked phone/email in its own bidi run so it doesn't get
+	// visually reordered when embedded inside the RTL Persian sentence.
+	$mask_html = '<bdi dir="ltr">' . esc_html( $mask ) . '</bdi>';
 	$via  = 'sms' === $channel
-		? ( $en ? "SMS to {$mask}" : "پیامک به {$mask}" )
-		: ( $en ? "email to {$mask}" : "ایمیل به {$mask}" );
+		? ( $en ? "SMS to {$mask_html}" : "پیامک به {$mask_html}" )
+		: ( $en ? "email to {$mask_html}" : "ایمیل به {$mask_html}" );
 
 	ob_start();
 	?>
@@ -786,18 +884,25 @@ function emb_accounts_settings_page() {
 		return;
 	}
 	if ( isset( $_POST['emb_accounts_nonce'] ) && wp_verify_nonce( sanitize_text_field( wp_unslash( $_POST['emb_accounts_nonce'] ) ), 'emb_accounts_save' ) ) {
-		$driver = ( 'kavenegar' === ( $_POST['emb_sms_driver'] ?? '' ) ) ? 'kavenegar' : 'log';
+		$posted_driver = (string) ( $_POST['emb_sms_driver'] ?? '' );
+		$driver        = in_array( $posted_driver, array( 'kavenegar', 'asanak' ), true ) ? $posted_driver : 'log';
 		update_option( 'emb_sms_driver', $driver );
 		update_option( 'emb_sms_kavenegar_key', sanitize_text_field( wp_unslash( $_POST['emb_sms_kavenegar_key'] ?? '' ) ) );
 		update_option( 'emb_sms_kavenegar_template', sanitize_text_field( wp_unslash( $_POST['emb_sms_kavenegar_template'] ?? '' ) ) );
+		update_option( 'emb_sms_asanak_username', sanitize_text_field( wp_unslash( $_POST['emb_sms_asanak_username'] ?? '' ) ) );
+		update_option( 'emb_sms_asanak_password', sanitize_text_field( wp_unslash( $_POST['emb_sms_asanak_password'] ?? '' ) ) );
+		update_option( 'emb_sms_asanak_source', sanitize_text_field( wp_unslash( $_POST['emb_sms_asanak_source'] ?? '' ) ) );
 		// eNamad snippet — store raw; [emb_enamad] runs it through wp_kses on output.
 		update_option( 'emb_enamad_code', trim( (string) wp_unslash( $_POST['emb_enamad_code'] ?? '' ) ) );
 		echo '<div class="notice notice-success is-dismissible"><p>ذخیره شد.</p></div>';
 	}
-	$driver = emb_sms_driver();
-	$key    = get_option( 'emb_sms_kavenegar_key', '' );
-	$tpl    = get_option( 'emb_sms_kavenegar_template', '' );
-	$enamad = get_option( 'emb_enamad_code', '' );
+	$driver      = emb_sms_driver();
+	$key         = get_option( 'emb_sms_kavenegar_key', '' );
+	$tpl         = get_option( 'emb_sms_kavenegar_template', '' );
+	$asanak_user = get_option( 'emb_sms_asanak_username', '' );
+	$asanak_pass = get_option( 'emb_sms_asanak_password', '' );
+	$asanak_src  = get_option( 'emb_sms_asanak_source', '' );
+	$enamad      = get_option( 'emb_enamad_code', '' );
 	?>
 	<div class="wrap">
 		<h1>easymakebot — تأیید حساب / پیامک</h1>
@@ -812,6 +917,7 @@ function emb_accounts_settings_page() {
 						<select name="emb_sms_driver" id="emb_sms_driver">
 							<option value="log" <?php selected( $driver, 'log' ); ?>>log (تست — بدون ارسال واقعی)</option>
 							<option value="kavenegar" <?php selected( $driver, 'kavenegar' ); ?>>Kavenegar (کاوه‌نگار)</option>
+							<option value="asanak" <?php selected( $driver, 'asanak' ); ?>>Asanak (آسانک)</option>
 						</select>
 					</td>
 				</tr>
@@ -824,6 +930,21 @@ function emb_accounts_settings_page() {
 					<th scope="row"><label for="emb_sms_kavenegar_template">نام الگو (template)</label></th>
 					<td><input type="text" class="regular-text" name="emb_sms_kavenegar_template" id="emb_sms_kavenegar_template" value="<?php echo esc_attr( $tpl ); ?>" placeholder="embverify" />
 						<p class="description">همان نام انگلیسی الگوی تأییدشده در پنل کاوه‌نگار (متد verify/lookup).</p></td>
+				</tr>
+				<tr>
+					<th scope="row"><label for="emb_sms_asanak_username">نام کاربری آسانک</label></th>
+					<td><input type="text" class="regular-text" name="emb_sms_asanak_username" id="emb_sms_asanak_username" value="<?php echo esc_attr( $asanak_user ); ?>" dir="ltr" autocomplete="off" />
+						<p class="description">نام کاربری وب‌سرویس پنل آسانک.</p></td>
+				</tr>
+				<tr>
+					<th scope="row"><label for="emb_sms_asanak_password">رمز عبور آسانک</label></th>
+					<td><input type="password" class="regular-text" name="emb_sms_asanak_password" id="emb_sms_asanak_password" value="<?php echo esc_attr( $asanak_pass ); ?>" dir="ltr" autocomplete="off" />
+						<p class="description">رمز عبور وب‌سرویس پنل آسانک.</p></td>
+				</tr>
+				<tr>
+					<th scope="row"><label for="emb_sms_asanak_source">شماره خط اختصاصی OTP (source)</label></th>
+					<td><input type="text" class="regular-text" name="emb_sms_asanak_source" id="emb_sms_asanak_source" value="<?php echo esc_attr( $asanak_src ); ?>" dir="ltr" placeholder="98998207650" />
+						<p class="description">همان شماره اختصاصی خط OTP که در پنل آسانک نشان داده می‌شود.</p></td>
 				</tr>
 				<tr>
 					<th scope="row"><label for="emb_enamad_code">کد نماد اعتماد (اینماد)</label></th>

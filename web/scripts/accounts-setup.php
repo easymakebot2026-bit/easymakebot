@@ -127,7 +127,7 @@ $priv_fa = <<<'HTML'
 <!-- wp:heading {"level":3} --><h3 class="wp-block-heading">۴. نگه‌داری</h3><!-- /wp:heading -->
 <!-- wp:paragraph --><p>تا زمانی که حساب فعال است و پس از آن به‌اندازهٔ لازم برای تعهدات قانونی، مالی و رسیدگی به تخلف. IP و لاگ‌های امنیتی برای بازهٔ محدود نگه داشته می‌شوند.</p><!-- /wp:paragraph -->
 <!-- wp:heading {"level":3} --><h3 class="wp-block-heading">۵. حقوق شما</h3><!-- /wp:heading -->
-<!-- wp:paragraph --><p>برای مشاهده، اصلاح یا حذف اطلاعات حسابت، یا سؤال دربارهٔ این سیاست، از راه‌های ارتباطی صفحهٔ <a href="/contact/">تماس با ما</a> با ما در تماس باش.</p><!-- /wp:paragraph -->
+<!-- wp:paragraph --><p>برای مشاهده، اصلاح یا حذف اطلاعات حسابت، یا سؤال دربارهٔ این سیاست، در تلگرام به <strong>@easymakebot</strong> پیام بده.</p><!-- /wp:paragraph -->
 HTML;
 
 $priv_en = <<<'HTML'
@@ -142,7 +142,7 @@ $priv_en = <<<'HTML'
 <!-- wp:heading {"level":3} --><h3 class="wp-block-heading">4. Retention</h3><!-- /wp:heading -->
 <!-- wp:paragraph --><p>While your account is active, and after that only as long as needed for legal, financial and abuse-handling obligations. IPs and security logs are kept for a limited period.</p><!-- /wp:paragraph -->
 <!-- wp:heading {"level":3} --><h3 class="wp-block-heading">5. Your rights</h3><!-- /wp:heading -->
-<!-- wp:paragraph --><p>To see, correct or delete your account data, or to ask about this policy, contact us via the <a href="/contact-en/">Contact</a> page.</p><!-- /wp:paragraph -->
+<!-- wp:paragraph --><p>To see, correct or delete your account data, or to ask about this policy, message <strong>@easymakebot</strong> on Telegram.</p><!-- /wp:paragraph -->
 HTML;
 
 if ( ! get_page_by_path( 'privacy' ) ) {

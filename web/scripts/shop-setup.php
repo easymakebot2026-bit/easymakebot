@@ -70,10 +70,10 @@ if ( ! $cat ) {
 $cat_id = is_array( $cat ) ? (int) $cat['term_id'] : (int) $cat;
 
 $plans = array(
-	array( 'sku' => 'emb-plan-1m',  'name' => '۱ ماهه',  'en' => '1 month',   'price' => 590000,  'usd' => 5.99,  'months' => 1,  'note' => '۳۰ روز زنده‌ماندن یک ربات روی تلگرام.' ),
-	array( 'sku' => 'emb-plan-3m',  'name' => '۳ ماهه',  'en' => '3 months',  'price' => 1590000, 'usd' => 15.99, 'months' => 3,  'note' => '۹۰ روز زنده‌ماندن یک ربات — حدود ۱۰٪ ارزان‌تر از خرید ماهانه.' ),
-	array( 'sku' => 'emb-plan-6m',  'name' => '۶ ماهه',  'en' => '6 months',  'price' => 2990000, 'usd' => 28.99, 'months' => 6,  'note' => '۱۸۰ روز زنده‌ماندن یک ربات — حدود ۱۵٪ ارزان‌تر از خرید ماهانه.' ),
-	array( 'sku' => 'emb-plan-12m', 'name' => '۱۲ ماهه', 'en' => '12 months', 'price' => 4990000, 'usd' => 49.99, 'months' => 12, 'note' => 'یک سال کامل زنده‌ماندن یک ربات — حدود ۳۰٪ ارزان‌تر، معادل ماهی حدود ۴۱۵ هزار تومان.' ),
+	array( 'sku' => 'emb-plan-1m',  'name' => '۱ ماهه',  'en' => '1 month',   'price' => 990000,  'usd' => 9.99,  'months' => 1,  'note' => '۳۰ روز زنده‌ماندن یک ربات روی تلگرام.' ),
+	array( 'sku' => 'emb-plan-3m',  'name' => '۳ ماهه',  'en' => '3 months',  'price' => 2670000, 'usd' => 24.99, 'months' => 3,  'note' => '۹۰ روز زنده‌ماندن یک ربات — حدود ۱۰٪ ارزان‌تر از ماهانه.' ),
+	array( 'sku' => 'emb-plan-6m',  'name' => '۶ ماهه',  'en' => '6 months',  'price' => 4750000, 'usd' => 42.99, 'months' => 6,  'note' => '۱۸۰ روز زنده‌ماندن یک ربات — حدود ۲۰٪ ارزان‌تر از ماهانه.' ),
+	array( 'sku' => 'emb-plan-12m', 'name' => '۱۲ ماهه', 'en' => '12 months', 'price' => 7900000, 'usd' => 69.99, 'months' => 12, 'note' => 'یک سال زنده‌ماندن یک ربات — حدود ۳۳٪ ارزان‌تر از ماهانه.' ),
 );
 
 foreach ( $plans as $p ) {

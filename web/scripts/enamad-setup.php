@@ -14,13 +14,9 @@ if ( ! defined( 'WP_CLI' ) ) { exit; }
 
 $pll = function_exists( 'PLL' ) ? PLL() : null;
 
-function emb_enamad_page( $slug, $lang, $title, $content, $genesis_title = '', $preserve_existing = false ) {
+function emb_enamad_page( $slug, $lang, $title, $content, $genesis_title = '' ) {
 	global $pll;
 	$existing = get_page_by_path( $slug );
-	if ( $existing && $preserve_existing ) {
-		WP_CLI::log( "  kept /{$slug}/ (#{$existing->ID}) — manual content preserved" );
-		return $existing->ID;
-	}
 	$data = array(
 		'post_type'    => 'page',
 		'post_status'  => 'publish',
@@ -71,11 +67,11 @@ $contact_fa = <<<'HTML'
 <li><strong>نام کسب‌وکار / مالک:</strong> [نام و نام خانوادگی یا نام ثبتی — مطابق اینماد]</li>
 <li><strong>نشانی:</strong> [نشانی کامل پستی به همراه کد پستی]</li>
 <li><strong>تلفن تماس:</strong> [شماره تلفن ثابت یا همراهِ قابل تأیید]</li>
-<li><strong>ایمیل:</strong> [ایمیل پشتیبانی روی دامنه، مثل info@easymakebot.com]</li>
-<li><strong>پشتیبانی در پیام‌رسان بله:</strong> [آیدی بله]</li>
+<li><strong>ایمیل:</strong> [ایمیل پشتیبانی]</li>
+<li><strong>تلگرام:</strong> <a href="https://t.me/easymakebot" target="_blank" rel="noopener">@easymakebot</a></li>
 <li><strong>ساعات پاسخ‌گویی:</strong> شنبه تا پنجشنبه، ۹ تا ۱۸</li>
 </ul><!-- /wp:list -->
-<!-- wp:paragraph --><p>برای پیگیری سفارش، مشکل پرداخت یا هر سؤالی می‌توانید از راه‌های بالا با ما در تماس باشید.</p><!-- /wp:paragraph -->
+<!-- wp:paragraph --><p>برای پیگیری سفارش، مشکل پرداخت یا هر سؤالی می‌توانید از راه‌های بالا با ما در تماس باشید. سریع‌ترین راه، پیام در تلگرام به <strong>@easymakebot</strong> است.</p><!-- /wp:paragraph -->
 HTML;
 
 $contact_en = <<<'HTML'
@@ -84,7 +80,8 @@ $contact_en = <<<'HTML'
 <li><strong>Business / owner:</strong> [name]</li>
 <li><strong>Address:</strong> [postal address]</li>
 <li><strong>Phone:</strong> [phone]</li>
-<li><strong>Email:</strong> [support email, e.g. info@easymakebot.com]</li>
+<li><strong>Email:</strong> [support email]</li>
+<li><strong>Telegram:</strong> <a href="https://t.me/easymakebot" target="_blank" rel="noopener">@easymakebot</a></li>
 </ul><!-- /wp:list -->
 HTML;
 
@@ -150,16 +147,13 @@ $terms_en = <<<'HTML'
 <!-- wp:paragraph --><p>These terms are governed by the laws of the Islamic Republic of Iran; disputes are handled first by negotiation and then by the competent Iranian courts.</p><!-- /wp:paragraph -->
 HTML;
 
-// about + contact hold the operator's real business identity, entered by hand in
-// wp-admin — never overwrite them on a re-run. terms/privacy are canonical text
-// we own, so they keep updating.
-emb_enamad_page( 'about', 'fa', 'درباره ما', $about_fa, 'درباره ما — easymakebot', true );
-emb_enamad_page( 'contact', 'fa', 'تماس با ما', $contact_fa, 'تماس با ما — easymakebot', true );
+emb_enamad_page( 'about', 'fa', 'درباره ما', $about_fa, 'درباره ما — easymakebot' );
+emb_enamad_page( 'contact', 'fa', 'تماس با ما', $contact_fa, 'تماس با ما — easymakebot' );
 emb_enamad_page( 'terms', 'fa', 'قوانین و مقررات', $terms_fa, 'قوانین و مقررات — easymakebot' );
 
 if ( $pll && function_exists( 'pll_default_language' ) ) {
-	$about_en_id   = emb_enamad_page( 'about-en', 'en', 'About', $about_en, '', true );
-	$contact_en_id = emb_enamad_page( 'contact-en', 'en', 'Contact', $contact_en, '', true );
+	$about_en_id   = emb_enamad_page( 'about-en', 'en', 'About', $about_en );
+	$contact_en_id = emb_enamad_page( 'contact-en', 'en', 'Contact', $contact_en );
 	emb_enamad_page( 'terms-en', 'en', 'Terms & Conditions', $terms_en );
 
 	// link fa <-> en so the language switcher resolves once EN is re-enabled

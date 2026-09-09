@@ -21,8 +21,6 @@ services:
       - "443:443/udp"
     volumes:
       - wp_data:/var/www/html:ro
-      # our theme + mu-plugins live as bind-mounts (not in the wp_data volume);
-      # Caddy's file_server needs them to serve theme assets (css/js/fonts).
       - ./wordpress/wp-content/themes/easymakebot:/var/www/html/wp-content/themes/easymakebot:ro
       - ./wordpress/wp-content/mu-plugins:/var/www/html/wp-content/mu-plugins:ro
       - ./Caddyfile:/etc/caddy/Caddyfile:ro

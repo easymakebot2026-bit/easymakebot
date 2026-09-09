@@ -12,9 +12,6 @@ services:
   wordpress:
     environment:
       WP_FORCE_SSL_ADMIN: "true"
-    # The cPanel mail server's hostname (s438.bitcommand.com) is not resolvable
-    # from the Iran host / ParsPack resolvers. Pin it to the hosting's shared IP
-    # so WP Mail SMTP can reach it on 465 with a cert that still matches the name.
     extra_hosts:
       - "s438.bitcommand.com:89.44.243.103"
     # No code bind-mounts in prod except our own theme + mu-plugins (still
