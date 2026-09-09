@@ -45,7 +45,10 @@ def _bot_status_line(built_bot) -> str:
 
 
 async def _send_menu(message: Message) -> None:
-    await message.answer("🛡 easymakebot Platform Admin Panel", reply_markup=admin_panel_menu_keyboard())
+    enabled = await admin_panel.get_bots_enabled()
+    await message.answer(
+        "🛡 easymakebot Platform Admin Panel", reply_markup=admin_panel_menu_keyboard(enabled)
+    )
 
 
 async def _send_bot_detail(message: Message, bot_id: str) -> bool:
@@ -372,3 +375,16 @@ async def start_broadcast_from_panel(callback: CallbackQuery, state: FSMContext)
         reply_markup=cancel_inline_keyboard(),
     )
     await callback.answer()
+
+
+# --- Global maintenance switch (all built bots at once) ---------------------
+
+
+@router.callback_query(F.data == "admin:toggle_bots", _is_platform_admin)
+async def toggle_bots_enabled(callback: CallbackQuery) -> None:
+    currently_enabled = await admin_panel.get_bots_enabled()
+    now_enabled = not currently_enabled
+    await admin_panel.set_bots_enabled(now_enabled)
+
+    await callback.answer("Bots resumed ✅" if now_enabled else "Bots paused — /start now shows the maintenance message ⏸")
+    await callback.message.edit_reply_markup(reply_markup=admin_panel_menu_keyboard(now_enabled))

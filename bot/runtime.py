@@ -37,7 +37,14 @@ from bot.db.base import async_session_maker
 from bot.db.models import BotPost, BotSubscriber, BroadcastLog, BuiltBot, Command, PostComment, PostLike, User
 from bot.flow_engine import _execute_node, find_trigger_node, run_flow
 from bot.force_join_gate import force_join_keyboard, missing_join_channels
-from bot.guide import SKIP_BUTTON_TEXT, TYPED_PHONE_INVALID, normalize_typed_phone, phone_share_keyboard
+from bot.guide import (
+    SKIP_BUTTON_TEXT,
+    TYPED_PHONE_INVALID,
+    is_iran_phone,
+    normalize_typed_phone,
+    phone_share_keyboard,
+)
+from bot.platform_settings import MAINTENANCE_TEXT_EN, MAINTENANCE_TEXT_FA, bots_enabled
 from bot.session import make_session
 from bot.states import (
     BuiltBotBroadcastStates,
@@ -265,6 +272,29 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
     dp = Dispatcher()
     owner_telegram_id = await _get_owner_telegram_id(bot_id)
 
+    # Platform-wide maintenance switch (bot/platform_settings.py, toggled
+    # from /easybotadmin) — an outer middleware runs before every handler
+    # below, on every message AND every button tap, for every command this
+    # bot has (no per-handler gating needed, and nothing can bypass it by
+    # matching some handler these two don't know about). No owner exemption
+    # here, unlike the platform bot's own /start in bot/main.py — this is a
+    # PLATFORM-wide pause, not something a built bot's own owner controls.
+    @dp.message.outer_middleware
+    async def _maintenance_gate_message(handler, message: Message, data: dict):
+        if await bots_enabled():
+            return await handler(message, data)
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        await message.answer(MAINTENANCE_TEXT_FA if is_fa else MAINTENANCE_TEXT_EN)
+        return None
+
+    @dp.callback_query.outer_middleware
+    async def _maintenance_gate_callback(handler, callback: CallbackQuery, data: dict):
+        if await bots_enabled():
+            return await handler(callback, data)
+        is_fa = await _end_user_prefers_persian(callback.from_user)
+        await callback.answer(MAINTENANCE_TEXT_FA if is_fa else MAINTENANCE_TEXT_EN, show_alert=True)
+        return None
+
     async def _register_subscriber(user_id: int) -> None:
         async with async_session_maker() as session:
             result = await session.execute(
@@ -276,6 +306,26 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             if result.scalar_one_or_none() is None:
                 session.add(BotSubscriber(bot_id=bot_id, telegram_id=user_id))
                 await session.commit()
+
+    async def _end_user_prefers_persian(tg_user) -> bool:
+        """Persian vs English for one of THIS bot's own subscribers/buyers —
+        not the same lookup as guide.owner_prefers_persian, which only ever
+        checks the platform's User table (bot owners). Prefers a phone number
+        already on file (same is_iran_phone signal used everywhere else);
+        someone who's never shared one yet — the common case for a first-ever
+        /start — falls back to their Telegram client's language, since no
+        phone-based signal exists for them at that point."""
+        async with async_session_maker() as session:
+            phone = (
+                await session.execute(
+                    select(BotSubscriber.phone_number).where(
+                        BotSubscriber.bot_id == bot_id, BotSubscriber.telegram_id == tg_user.id
+                    )
+                )
+            ).scalar_one_or_none()
+        if phone is not None:
+            return is_iran_phone(phone)
+        return (tg_user.language_code or "").lower().startswith("fa")
 
     async def _complete_start(message: Message, user_id: int) -> None:
         await _register_subscriber(user_id)

@@ -18,6 +18,8 @@ from sqlalchemy import func, select
 
 from bot.db.base import async_session_maker
 from bot.db.models import BotSubscriber, BuiltBot, Order, Product, User
+from bot.platform_settings import bots_enabled as _bots_enabled
+from bot.platform_settings import set_bots_enabled as _set_bots_enabled
 from bot.runtime import start_built_bot, stop_built_bot
 
 PAID_STATUSES = ("paid", "fulfilled")  # money has actually changed hands
@@ -153,6 +155,17 @@ async def unsuspend_bot(bot_id: uuid.UUID | str) -> BuiltBot | None:
     if built_bot.live_until is not None and built_bot.live_until > now:
         start_built_bot(built_bot.id, built_bot.token)
     return built_bot
+
+
+# --- Platform-wide maintenance switch (all bots at once, no process kill) --
+
+
+async def get_bots_enabled() -> bool:
+    return await _bots_enabled()
+
+
+async def set_bots_enabled(enabled: bool) -> None:
+    await _set_bots_enabled(enabled)
 
 
 async def grant_bot_access(bot_id: uuid.UUID | str, days: int | None) -> BuiltBot | None:

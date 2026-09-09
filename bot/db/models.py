@@ -44,6 +44,24 @@ class User(Base):
     )
 
 
+class PlatformSettings(Base):
+    """Single-row table (id is always 1 — see bot/platform_settings.py) for
+    switches that apply to every built bot at once, as opposed to
+    BuiltBot.suspended which is per-bot. Read from each built bot's own
+    dispatcher (bot/runtime.py:handle_start); written from /easybotadmin
+    (bot/handlers/easybotadmin.py, via bot/admin_panel.py)."""
+
+    __tablename__ = "platform_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    # False = every built bot's /start replies with a localized "under
+    # maintenance" message instead of running its normal flow — the process
+    # itself keeps running/polling, unlike a per-bot suspend. Meant for a
+    # brief, deliberate pause (e.g. a platform deploy), not moderation.
+    bots_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+
 class BuiltBot(Base):
     """A bot that a user has built with easymakebot."""
 

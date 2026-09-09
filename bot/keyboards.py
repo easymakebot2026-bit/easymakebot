@@ -1421,7 +1421,12 @@ def webapp_keyboard(webapp_url: str, bot_id, is_fa: bool = False) -> InlineKeybo
 # --- facing, so it's left out of this pass.                             ---
 
 
-def admin_panel_menu_keyboard() -> InlineKeyboardMarkup:
+def admin_panel_menu_keyboard(bots_enabled: bool = True) -> InlineKeyboardMarkup:
+    # Global maintenance switch (bot/db/models.py: PlatformSettings) — every
+    # built bot keeps running, but /start shows a "back soon" message instead
+    # of its normal flow while this is off. Separate from per-bot suspend
+    # (admin:suspend:*), which actually kills that one bot's process.
+    toggle_text = "🟢 Bots: ON (tap to pause all)" if bots_enabled else "🔴 Bots: OFF (tap to resume all)"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="📊 Stats & Activity", callback_data="admin:stats")],
@@ -1430,6 +1435,7 @@ def admin_panel_menu_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🤖 All Bots", callback_data="admin:bots"),
             ],
             [InlineKeyboardButton(text="📢 Broadcast to All", callback_data="admin:broadcast")],
+            [InlineKeyboardButton(text=toggle_text, callback_data="admin:toggle_bots")],
         ]
     )
 

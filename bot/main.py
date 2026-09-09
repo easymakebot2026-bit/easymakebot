@@ -25,6 +25,12 @@ from bot.handlers.tools.force_join import router as force_join_router
 from bot.handlers.tools.message_to_all import router as message_to_all_router
 from bot.handlers.tools.shop import router as shop_router
 from bot.handlers.tools_menu import router as tools_menu_router
+from bot.platform_settings import (
+    MAINTENANCE_TEXT_EN,
+    MAINTENANCE_TEXT_FA,
+    bots_enabled,
+    platform_user_prefers_persian,
+)
 from bot.runtime import run_campaign_expiry_loop, run_live_expiry_loop, start_all_built_bots
 from bot.session import make_session
 from bot.webapp_server import start_webapp_server
@@ -83,6 +89,33 @@ async def main() -> None:
         except Exception:
             logger.exception("help tip failed for %s", getattr(event, "data", None))
         return result
+
+    # Platform-wide maintenance switch (bot/platform_settings.py, toggled from
+    # /easybotadmin) — an outer middleware runs before every handler below, on
+    # every message AND every button tap, across every router registered on
+    # this dp (nothing can bypass it by matching some handler these two don't
+    # know about). Unlike the built-bot version in bot/runtime.py, the
+    # platform admin is exempted so they can still reach /easybotadmin (and
+    # everything else) to toggle bots back on while paused.
+    @dp.message.outer_middleware
+    async def _maintenance_gate_message(handler, message, data):
+        if message.from_user is not None and message.from_user.id == config.platform_admin_id:
+            return await handler(message, data)
+        if await bots_enabled():
+            return await handler(message, data)
+        is_fa = await platform_user_prefers_persian(message.from_user)
+        await message.answer(MAINTENANCE_TEXT_FA if is_fa else MAINTENANCE_TEXT_EN)
+        return None
+
+    @dp.callback_query.outer_middleware
+    async def _maintenance_gate_callback(handler, callback, data):
+        if callback.from_user is not None and callback.from_user.id == config.platform_admin_id:
+            return await handler(callback, data)
+        if await bots_enabled():
+            return await handler(callback, data)
+        is_fa = await platform_user_prefers_persian(callback.from_user)
+        await callback.answer(MAINTENANCE_TEXT_FA if is_fa else MAINTENANCE_TEXT_EN, show_alert=True)
+        return None
 
     # /cancel must win over every state-scoped catch-all handler below, so it can
     # always break out of a stuck multi-step flow regardless of the current state.
