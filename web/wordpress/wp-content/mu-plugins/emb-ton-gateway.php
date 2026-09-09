@@ -242,7 +242,8 @@ function emb_ton_render_box( $order_id, $plain = false ) {
 			. "  • {$tonfmt} TON\n"
 			. "Wallet: {$wallet}\n"
 			. "Comment / memo: {$comment}\n"
-			. "It confirms automatically within a few minutes.";
+			. "It confirms automatically within a few minutes.\n"
+			. "Still nothing after 20 minutes? Contact support at t.me/EMB_Support with your order number (#{$order->get_id()}) — we'll verify manually.";
 	}
 
 	ob_start(); ?>
@@ -266,6 +267,7 @@ function emb_ton_render_box( $order_id, $plain = false ) {
 			<a class="button emb-ton-check" href="<?php echo esc_url( $check_url ); ?>">I've paid — check now</a>
 		</p>
 		<p class="emb-ton-note">Confirms automatically within a few minutes. You can safely close this page — the code is emailed to you.</p>
+		<p class="emb-ton-support">Still nothing after 20 minutes? Contact <a href="https://t.me/EMB_Support">support</a> with your order number (#<?php echo esc_html( $order->get_id() ); ?>) — we'll verify the transaction manually.</p>
 	</div>
 	<?php
 	return ob_get_clean();
