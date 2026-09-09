@@ -30,6 +30,7 @@ class Config:
     # the payment runs on the Iranian site with a native Iran IP — a Telegram
     # VPN would break the gateway). Defaults to "{website_url}/plans/".
     website_plans_url: str | None
+    website_plans_url_en: str | None
     # When the website is in Iran and the bot abroad, the bot must NOT start
     # its own Zarinpal payment for Iran owners (foreign server IP + the buyer's
     # Telegram VPN both fight the gateway) — they buy on the website and redeem
@@ -53,6 +54,9 @@ def load_config() -> Config:
     website_plans_url = (os.getenv("WEBSITE_PLANS_URL") or "").rstrip("/") or None
     if website_plans_url is None and website_url is not None:
         website_plans_url = f"{website_url}/plans/"
+    website_plans_url_en = (os.getenv("WEBSITE_PLANS_URL_EN") or "").rstrip("/") or None
+    if website_plans_url_en is None and website_url is not None:
+        website_plans_url_en = f"{website_url}/en/"
     platform_onbot_zarinpal = (os.getenv("PLATFORM_ONBOT_ZARINPAL") or "").strip().lower() in (
         "1", "true", "yes", "on"
     )
@@ -83,5 +87,6 @@ def load_config() -> Config:
         website_url=website_url,
         website_activation_key=website_activation_key,
         website_plans_url=website_plans_url,
+        website_plans_url_en=website_plans_url_en,
         platform_onbot_zarinpal=platform_onbot_zarinpal,
     )

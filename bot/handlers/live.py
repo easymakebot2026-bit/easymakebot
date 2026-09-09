@@ -73,7 +73,10 @@ async def _send_live_status(message: Message, bot_id: str, telegram_id: int) -> 
 
     methods = platform_billing.available_methods_for_region(region)
     can_redeem = website_client.is_configured()
-    plans_url = _config.website_plans_url if can_redeem else None
+    plans_url = (
+        (_config.website_plans_url if region == "iran" else _config.website_plans_url_en)
+        if can_redeem else None
+    )
 
     if not methods and not show_trial and not plans_url and not can_redeem:
         extra = (
@@ -91,9 +94,7 @@ async def _send_live_status(message: Message, bot_id: str, telegram_id: int) -> 
             "برای صفحهٔ پرداخت موقتاً خاموشش کن تا درگاه ایرانی درست کار کنه. بعد از پرداخت، "
             "کدی که می‌گیری (EMB-XXXX-XXXX) رو با «فعال‌سازی با کد» همین‌جا وارد کن."
             if is_fa
-            else "\n\nPlans are bought on the website (not inside Telegram). If you use a VPN "
-            "for Telegram, turn it off for the payment page so the gateway works, then come "
-            "back and enter the code you get (EMB-XXXX-XXXX) with \"Activate with a code\"."
+            else "\n\nPlans are bought on the website (opens automatically). Pay with TON (or card, if enabled) — once it confirms, you'll get a code (EMB-XXXX-XXXX). Enter it here with \"Activate with a code\"."
         )
 
     await message.answer(
