@@ -15,13 +15,13 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from bot.config import load_config
 from bot.db.base import async_session_maker
 from bot.db.models import BuiltBot, LivePayment, User
 from bot.guide import is_iran_phone
-from bot.live import LIVE_PLANS, set_live_until
+from bot.live import LIVE_PLANS, get_built_bot, set_live_until
 from bot.runtime import start_built_bot
 from bot.session import make_session
 from bot.shop import (
@@ -122,10 +122,16 @@ async def get_live_payment(payment_id: int) -> LivePayment | None:
 async def _activate_bot(payment: LivePayment) -> None:
     """Shared activation step for every successful payment method below —
     same machinery bot/admin_panel.py:grant_bot_access already uses
-    (set_live_until + start_built_bot)."""
-    until = datetime.now(timezone.utc) + timedelta(
-        days=payment.days if payment.days is not None else 3650
-    )
+    (set_live_until + start_built_bot).
+
+    Extends from the LATER of now or the bot's current live_until (same
+    "renew, don't reset" rule bot/shop.py uses for subscription products) —
+    otherwise buying a new plan while days are still left on the current one
+    would throw those paid-for days away instead of stacking on top."""
+    now = datetime.now(timezone.utc)
+    existing = await get_built_bot(payment.bot_id)
+    base = existing.live_until if (existing and existing.live_until and existing.live_until > now) else now
+    until = base + timedelta(days=payment.days if payment.days is not None else 3650)
     built_bot = await set_live_until(payment.bot_id, until)
     if built_bot is not None and not built_bot.suspended:
         start_built_bot(built_bot.id, built_bot.token)
@@ -200,13 +206,20 @@ async def verify_zarinpal_live_payment(authority: str) -> LivePayment | None:
         return payment
 
     async with async_session_maker() as session:
-        result = await session.execute(select(LivePayment).where(LivePayment.id == payment.id))
-        row = result.scalar_one()
-        row.status = "paid"
-        row.zarinpal_ref_id = str(verify_data.get("ref_id") or "")
+        # Atomic pending->paid guard — same reasoning as bot/shop.py's
+        # verify_zarinpal_payment: Zarinpal's callback (or the buyer's
+        # browser redirect) can fire more than once for the same payment,
+        # and without this only one of the concurrent calls should actually
+        # activate the bot.
+        result = await session.execute(
+            update(LivePayment)
+            .where(LivePayment.id == payment.id, LivePayment.status == "pending")
+            .values(status="paid", zarinpal_ref_id=str(verify_data.get("ref_id") or ""))
+        )
         await session.commit()
-        await session.refresh(row)
-        payment = row
+        if result.rowcount == 0:
+            return await get_live_payment(payment.id)
+        payment = await get_live_payment(payment.id)
 
     await _activate_bot(payment)
     await _notify_owner(
@@ -266,12 +279,16 @@ async def verify_stripe_live_payment(session_id: str) -> LivePayment | None:
         return payment
 
     async with async_session_maker() as session:
-        result = await session.execute(select(LivePayment).where(LivePayment.id == payment.id))
-        row = result.scalar_one()
-        row.status = "paid"
+        # Same atomic guard as verify_zarinpal_live_payment above.
+        result = await session.execute(
+            update(LivePayment)
+            .where(LivePayment.id == payment.id, LivePayment.status == "pending")
+            .values(status="paid")
+        )
         await session.commit()
-        await session.refresh(row)
-        payment = row
+        if result.rowcount == 0:
+            return await get_live_payment(payment.id)
+        payment = await get_live_payment(payment.id)
 
     await _activate_bot(payment)
     await _notify_owner(
@@ -299,13 +316,20 @@ async def submit_ton_live_payment(payment_id: int, tx_hash: str) -> LivePayment:
 
 async def approve_ton_live_payment(payment_id: int) -> LivePayment | None:
     async with async_session_maker() as session:
-        result = await session.execute(select(LivePayment).where(LivePayment.id == payment_id))
-        payment = result.scalar_one_or_none()
+        # Same double-tap guard as bot/shop.py's approve_manual_payment —
+        # the admin double-tapping "Approve" before its keyboard is removed
+        # could otherwise activate/extend the same bot twice.
+        result = await session.execute(
+            update(LivePayment)
+            .where(LivePayment.id == payment_id, LivePayment.status == "pending")
+            .values(status="paid")
+        )
+        await session.commit()
+        if result.rowcount == 0:
+            return await get_live_payment(payment_id)
+        payment = await get_live_payment(payment_id)
         if payment is None:
             return None
-        payment.status = "paid"
-        await session.commit()
-        await session.refresh(payment)
 
     await _activate_bot(payment)
     await _notify_owner(

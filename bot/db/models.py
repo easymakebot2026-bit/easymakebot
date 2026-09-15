@@ -35,6 +35,13 @@ class User(Base):
     # possible (bot.guide.is_iran_phone), else asked once and remembered here.
     region: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # The free 72h /live trial (bot/live.py:TRIAL_HOURS) is one-time PER
+    # PERSON, not per bot — set the moment any of this user's bots starts a
+    # trial (bot/handlers/live.py:start_trial), and checked before offering
+    # the trial button on every OTHER bot they build, so deleting a bot and
+    # creating a new one can't farm another free 72h window.
+    trial_used: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

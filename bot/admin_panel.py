@@ -42,12 +42,30 @@ async def get_platform_stats() -> dict:
         product_count = (await session.execute(select(func.count(Product.id)))).scalar_one()
 
         order_count = (await session.execute(select(func.count(Order.id)))).scalar_one()
-        result = await session.execute(
-            select(func.count(Order.id), func.coalesce(func.sum(Order.price), 0)).where(
-                Order.status.in_(PAID_STATUSES)
+        # Order.price is Toman for every payment_method EXCEPT "stripe",
+        # which is whole US dollars (bot/shop.py's STRIPE_CHECKOUT_URL
+        # comment) — summing across methods without splitting by currency
+        # would silently add dollars to Toman. Group by method instead, same
+        # as get_bot_detail below, and only combine the Toman-denominated
+        # ones into one figure.
+        shop_method_result = await session.execute(
+            select(
+                Order.payment_method,
+                func.count(Order.id),
+                func.coalesce(func.sum(Order.price), 0),
             )
+            .where(Order.status.in_(PAID_STATUSES))
+            .group_by(Order.payment_method)
         )
-        paid_order_count, revenue = result.one()
+        paid_order_count = 0
+        revenue = 0
+        shop_revenue_usd = 0
+        for method, count, total in shop_method_result.all():
+            paid_order_count += count
+            if method == "stripe":
+                shop_revenue_usd += int(total)
+            else:
+                revenue += int(total)
 
         live_result = await session.execute(
             select(
@@ -90,6 +108,7 @@ async def get_platform_stats() -> dict:
         "order_count": order_count,
         "paid_order_count": paid_order_count,
         "revenue_toman": int(revenue),
+        "shop_revenue_usd": shop_revenue_usd,
         "platform_revenue_toman": platform_revenue_toman,
         "platform_revenue_usd": platform_revenue_usd,
         "platform_revenue_ton_usd": platform_revenue_ton_usd,
@@ -146,12 +165,6 @@ async def get_bot_detail(bot_id: uuid.UUID | str) -> dict | None:
             )
         ).scalar_one()
 
-        order_result = await session.execute(
-            select(func.count(Order.id), func.coalesce(func.sum(Order.price), 0))
-            .where(Order.bot_id == bot_id, Order.status.in_(PAID_STATUSES))
-        )
-        paid_order_count, revenue = order_result.one()
-
         method_result = await session.execute(
             select(
                 Order.payment_method,
@@ -165,6 +178,11 @@ async def get_bot_detail(bot_id: uuid.UUID | str) -> dict | None:
             (method or "unknown"): {"count": count, "revenue": int(total)}
             for method, count, total in method_result.all()
         }
+        # Same currency split as get_platform_stats: "stripe" orders are USD,
+        # everything else is Toman — never sum them into one number.
+        paid_order_count = sum(v["count"] for v in orders_by_method.values())
+        revenue = sum(v["revenue"] for k, v in orders_by_method.items() if k != "stripe")
+        revenue_usd = orders_by_method.get("stripe", {}).get("revenue", 0)
 
     return {
         "bot": built_bot,
@@ -172,6 +190,7 @@ async def get_bot_detail(bot_id: uuid.UUID | str) -> dict | None:
         "subscriber_count": subscriber_count,
         "paid_order_count": paid_order_count,
         "revenue_toman": int(revenue),
+        "revenue_usd": int(revenue_usd),
         "orders_by_method": orders_by_method,
     }
 

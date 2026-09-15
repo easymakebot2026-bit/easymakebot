@@ -797,18 +797,27 @@ async def verify_zarinpal_payment(authority: str) -> Order | None:
         return order
 
     async with async_session_maker() as session:
-        result = await session.execute(select(Order).where(Order.id == order.id))
-        row = result.scalar_one()
-        row.status = "paid"
-        row.zarinpal_ref_id = str(verify_data.get("ref_id") or "")
+        # Atomic pending->paid transition: the WHERE status='pending' guard
+        # means only ONE of two concurrent verify calls for the same order
+        # (Zarinpal's callback firing twice, or a buyer refreshing the
+        # return page) can ever actually flip the row — the loser's UPDATE
+        # matches zero rows because by the time it runs the status has
+        # already changed, so it skips fulfillment instead of delivering
+        # the product/decrementing stock a second time.
+        result = await session.execute(
+            update(Order)
+            .where(Order.id == order.id, Order.status == "pending")
+            .values(status="paid", zarinpal_ref_id=str(verify_data.get("ref_id") or ""))
+        )
         await session.commit()
-        await session.refresh(row)
-        order = row
+        if result.rowcount == 0:
+            return await get_order(order.id)
 
     async with async_session_maker() as session:
         result = await session.execute(select(BuiltBot).where(BuiltBot.id == order.bot_id))
         built_bot = result.scalar_one()
 
+    order = await get_order(order.id)
     temp_bot = Bot(token=built_bot.token, session=make_session())
     try:
         await fulfill_order(temp_bot, order)
@@ -923,17 +932,23 @@ async def verify_stripe_payment(session_id: str) -> Order | None:
         return order
 
     async with async_session_maker() as session:
-        result = await session.execute(select(Order).where(Order.id == order.id))
-        row = result.scalar_one()
-        row.status = "paid"
+        # Same atomic pending->paid guard as verify_zarinpal_payment above —
+        # Stripe can (and does) redirect the buyer's browser to the success
+        # URL more than once for the same session.
+        result = await session.execute(
+            update(Order)
+            .where(Order.id == order.id, Order.status == "pending")
+            .values(status="paid")
+        )
         await session.commit()
-        await session.refresh(row)
-        order = row
+        if result.rowcount == 0:
+            return await get_order(order.id)
 
     async with async_session_maker() as session:
         result = await session.execute(select(BuiltBot).where(BuiltBot.id == order.bot_id))
         built_bot = result.scalar_one()
 
+    order = await get_order(order.id)
     temp_bot = Bot(token=built_bot.token, session=make_session())
     try:
         await fulfill_order(temp_bot, order)
@@ -993,18 +1008,21 @@ async def verify_zarinpal_checkout(authority: str) -> Checkout | None:
         return checkout
 
     async with async_session_maker() as session:
-        result = await session.execute(select(Checkout).where(Checkout.id == checkout.id))
-        row = result.scalar_one()
-        row.status = "paid"
-        row.zarinpal_ref_id = str(verify_data.get("ref_id") or "")
+        # Same atomic pending->paid guard as verify_zarinpal_payment above.
+        result = await session.execute(
+            update(Checkout)
+            .where(Checkout.id == checkout.id, Checkout.status == "pending")
+            .values(status="paid", zarinpal_ref_id=str(verify_data.get("ref_id") or ""))
+        )
         await session.commit()
-        await session.refresh(row)
-        checkout = row
+        if result.rowcount == 0:
+            return await get_checkout(checkout.id)
 
     async with async_session_maker() as session:
         result = await session.execute(select(BuiltBot).where(BuiltBot.id == checkout.bot_id))
         built_bot = result.scalar_one()
 
+    checkout = await get_checkout(checkout.id)
     temp_bot = Bot(token=built_bot.token, session=make_session())
     try:
         await fulfill_checkout(temp_bot, checkout)
@@ -1057,17 +1075,21 @@ async def verify_stripe_checkout(session_id: str) -> Checkout | None:
         return checkout
 
     async with async_session_maker() as session:
-        result = await session.execute(select(Checkout).where(Checkout.id == checkout.id))
-        row = result.scalar_one()
-        row.status = "paid"
+        # Same atomic pending->paid guard as verify_zarinpal_payment above.
+        result = await session.execute(
+            update(Checkout)
+            .where(Checkout.id == checkout.id, Checkout.status == "pending")
+            .values(status="paid")
+        )
         await session.commit()
-        await session.refresh(row)
-        checkout = row
+        if result.rowcount == 0:
+            return await get_checkout(checkout.id)
 
     async with async_session_maker() as session:
         result = await session.execute(select(BuiltBot).where(BuiltBot.id == checkout.bot_id))
         built_bot = result.scalar_one()
 
+    checkout = await get_checkout(checkout.id)
     temp_bot = Bot(token=built_bot.token, session=make_session())
     try:
         await fulfill_checkout(temp_bot, checkout)
@@ -1095,13 +1117,17 @@ async def submit_manual_payment(order_id: int, payment_method: str, transaction_
 
 async def approve_manual_payment(bot: Bot, order_id: int) -> Order:
     async with async_session_maker() as session:
-        result = await session.execute(select(Order).where(Order.id == order_id))
-        order = result.scalar_one()
-        order.status = "paid"
+        # Atomic guard — the owner double-tapping "✅ Confirm" before its
+        # keyboard is removed (handle_order_approve in bot/runtime.py) could
+        # otherwise fire this twice concurrently and fulfill/deliver twice.
+        result = await session.execute(
+            update(Order).where(Order.id == order_id, Order.status == "pending").values(status="paid")
+        )
         await session.commit()
-        await session.refresh(order)
-        order_snapshot = order
+        if result.rowcount == 0:
+            return await get_order(order_id)
 
+    order_snapshot = await get_order(order_id)
     await fulfill_order(bot, order_snapshot)
     # fulfill_order updates status/invoice_number on its own session, so
     # order_snapshot is stale (still "paid") — re-fetch for the caller.
@@ -1134,13 +1160,17 @@ async def submit_manual_checkout_payment(checkout_id: int, payment_method: str, 
 
 async def approve_manual_checkout(bot: Bot, checkout_id: int) -> Checkout:
     async with async_session_maker() as session:
-        result = await session.execute(select(Checkout).where(Checkout.id == checkout_id))
-        checkout = result.scalar_one()
-        checkout.status = "paid"
+        # Same double-tap guard as approve_manual_payment above.
+        result = await session.execute(
+            update(Checkout)
+            .where(Checkout.id == checkout_id, Checkout.status == "pending")
+            .values(status="paid")
+        )
         await session.commit()
-        await session.refresh(checkout)
-        checkout_snapshot = checkout
+        if result.rowcount == 0:
+            return await get_checkout(checkout_id)
 
+    checkout_snapshot = await get_checkout(checkout_id)
     await fulfill_checkout(bot, checkout_snapshot)
     return await get_checkout(checkout_id)
 
@@ -1284,6 +1314,22 @@ async def _assign_pool_item(product_id: int, order_id: int) -> str | None:
     return payload
 
 
+async def _get_or_assign_pool_item(product_id: int, order_id: int) -> str | None:
+    """Returns THIS order's already-assigned item if a previous delivery
+    attempt claimed one but then failed to actually reach the buyer (see
+    _deliver_digital_product's pool branch) — so a retry re-sends the SAME
+    item instead of calling _assign_pool_item again, which would hand out a
+    SECOND item and leave the first one permanently "assigned" to nobody."""
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(ProductDeliveryItem).where(ProductDeliveryItem.order_id == order_id)
+        )
+        existing = result.scalar_one_or_none()
+        if existing is not None:
+            return existing.payload
+    return await _assign_pool_item(product_id, order_id)
+
+
 async def _notify_owner_delivery_failed(bot: Bot, order: Order, product: Product, reason: str) -> None:
     """Alerts the bot owner (never left to notice a stuck order on their
     own) with a one-tap Retry button — bot/runtime.py:handle_retry_delivery
@@ -1405,7 +1451,7 @@ async def _deliver_digital_product(bot: Bot, order: Order, product: Product) -> 
     mode = product.delivery_mode or DELIVERY_MODE_STATIC
 
     if mode == DELIVERY_MODE_POOL:
-        payload = await _assign_pool_item(product.id, order.id)
+        payload = await _get_or_assign_pool_item(product.id, order.id)
         if payload is None:
             await bot.send_message(
                 order.buyer_telegram_id,
@@ -1414,11 +1460,20 @@ async def _deliver_digital_product(bot: Bot, order: Order, product: Product) -> 
             )
             await _notify_owner_delivery_failed(bot, order, product, "the item pool is empty")
             return False
-        parts = [f"✅ Payment confirmed for \"{product.name}\"."]
-        if product.delivery_text:
-            parts.append(product.delivery_text)
-        await bot.send_message(order.buyer_telegram_id, "\n\n".join(parts))
-        await bot.send_message(order.buyer_telegram_id, payload)
+        try:
+            parts = [f"✅ Payment confirmed for \"{product.name}\"."]
+            if product.delivery_text:
+                parts.append(product.delivery_text)
+            await bot.send_message(order.buyer_telegram_id, "\n\n".join(parts))
+            await bot.send_message(order.buyer_telegram_id, payload)
+        except Exception as exc:
+            # The item is already marked "assigned" (to THIS order) in
+            # _assign_pool_item — deliberately not undone here, so a retry
+            # goes through _get_or_assign_pool_item above and resends the
+            # SAME item rather than consuming a second one from the pool.
+            logger.exception("Failed to send pool item to buyer for order %s", order.id)
+            await _notify_owner_delivery_failed(bot, order, product, f"couldn't message the buyer: {exc}")
+            return False
         return True
 
     if mode == DELIVERY_MODE_API:
@@ -1436,11 +1491,25 @@ async def _deliver_digital_product(bot: Bot, order: Order, product: Product) -> 
             )
             await _notify_owner_delivery_failed(bot, order, product, result or "the API call failed")
             return False
-        parts = [f"✅ Payment confirmed for \"{product.name}\"."]
-        if product.delivery_text:
-            parts.append(product.delivery_text)
-        await bot.send_message(order.buyer_telegram_id, "\n\n".join(parts))
-        await bot.send_message(order.buyer_telegram_id, result)
+        try:
+            parts = [f"✅ Payment confirmed for \"{product.name}\"."]
+            if product.delivery_text:
+                parts.append(product.delivery_text)
+            await bot.send_message(order.buyer_telegram_id, "\n\n".join(parts))
+            await bot.send_message(order.buyer_telegram_id, result)
+        except Exception as exc:
+            # The API call itself already succeeded (ok=True) — a retry will
+            # call it again, which is fine for an idempotent "fetch a code"
+            # endpoint but could hand out a SECOND code for a non-idempotent
+            # one. Flagged in the owner's delivery-failed message so they
+            # know to check for that before retrying.
+            logger.exception("Failed to send API delivery result to buyer for order %s", order.id)
+            await _notify_owner_delivery_failed(
+                bot, order, product,
+                f"the API call succeeded but couldn't message the buyer: {exc} "
+                "(a retry will call the API again — check it's safe to call twice)",
+            )
+            return False
         return True
 
     # DELIVERY_MODE_STATIC — same shared link/text sent to every buyer.

@@ -280,3 +280,31 @@ async def init_db() -> None:
                 "ON product_delivery_items (product_id, status)"
             )
         )
+        # One-time-per-person free trial (bot/live.py, bot/db/models.py:User).
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_used BOOLEAN NOT NULL DEFAULT false")
+        )
+        # Postgres doesn't auto-index foreign keys. These back the per-bot /
+        # per-owner scoped queries that run on every incoming message or
+        # dashboard view (bot/runtime.py's command lookup on every update is
+        # the hottest of these) — added late because the tables were small
+        # enough not to notice the missing index until now.
+        for _index_sql in (
+            "CREATE INDEX IF NOT EXISTS ix_commands_bot_id ON commands (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_join_channels_bot_id ON join_channels (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_content_items_bot_id ON content_items (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_content_unlocks_bot_id ON content_unlocks (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_bot_subscribers_bot_id ON bot_subscribers (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_bot_posts_bot_id ON bot_posts (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_products_bot_id ON products (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_price_campaigns_bot_id ON price_campaigns (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_orders_bot_id ON orders (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_orders_product_id ON orders (product_id)",
+            "CREATE INDEX IF NOT EXISTS ix_orders_buyer_telegram_id ON orders (buyer_telegram_id)",
+            "CREATE INDEX IF NOT EXISTS ix_cart_items_bot_id ON cart_items (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_checkouts_bot_id ON checkouts (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_live_payments_bot_id ON live_payments (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_broadcast_logs_bot_id ON broadcast_logs (bot_id)",
+            "CREATE INDEX IF NOT EXISTS ix_built_bots_owner_id ON built_bots (owner_id)",
+        ):
+            await conn.execute(text(_index_sql))

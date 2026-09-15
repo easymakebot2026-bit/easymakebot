@@ -116,6 +116,21 @@ async def new_channel(message: Message, state: FSMContext) -> None:
 async def select_channel(callback: CallbackQuery, state: FSMContext) -> None:
     is_fa = await owner_prefers_persian(callback.from_user)
     channel_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    bot_id = data.get("active_bot_id")
+
+    async with async_session_maker() as session:
+        result = await session.execute(select(JoinChannel).where(JoinChannel.id == channel_id))
+        channel = result.scalar_one_or_none()
+    if channel is None or str(channel.bot_id) != str(bot_id):
+        # Ownership check — this callback_data carries a bare channel_id, so
+        # a forwarded/copied button from a DIFFERENT owner's "edit channel"
+        # message must not let this user overwrite that other bot's force-join
+        # channel just because it's the active bot in their own FSM state.
+        text = "کانال پیدا نشد." if is_fa else "Channel not found."
+        await callback.answer(text, show_alert=True)
+        return
+
     await state.update_data(editing_channel_id=channel_id)
     await state.set_state(ForceJoinStates.waiting_for_channel_name)
     text = (
@@ -161,7 +176,10 @@ async def confirm_channel(message: Message, state: FSMContext) -> None:
                 select(JoinChannel).where(JoinChannel.id == editing_channel_id)
             )
             channel = result.scalar_one_or_none()
-            if channel is not None:
+            # Re-check ownership here too (not just in select_channel above) —
+            # this is the actual write, and it's cheap insurance against any
+            # other path that could set editing_channel_id in FSM state.
+            if channel is not None and str(channel.bot_id) == str(bot_id):
                 channel.username = username
         else:
             session.add(JoinChannel(bot_id=bot_id, username=username))

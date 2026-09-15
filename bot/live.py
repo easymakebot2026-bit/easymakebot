@@ -107,6 +107,20 @@ def trial_until() -> datetime:
     return datetime.now(timezone.utc) + timedelta(hours=TRIAL_HOURS)
 
 
+async def mark_trial_used(owner_id: int) -> None:
+    """Called once, right after a trial actually starts (bot/handlers/live.py:
+    start_trial) — flips User.trial_used so no OTHER bot belonging to the same
+    person can ever be offered the trial button again. Deliberately keyed off
+    User.id (one row per Telegram account), not BuiltBot, so deleting the
+    trial bot and creating a new one doesn't reset anything."""
+    async with async_session_maker() as session:
+        result = await session.execute(select(User).where(User.id == owner_id))
+        user = result.scalar_one_or_none()
+        if user is not None and not user.trial_used:
+            user.trial_used = True
+            await session.commit()
+
+
 def suspension_status_text(built_bot: BuiltBot, is_fa: bool = False) -> str:
     reason = built_bot.suspension_reason or ("دلیلی ذکر نشده" if is_fa else "no reason given")
     if is_fa:

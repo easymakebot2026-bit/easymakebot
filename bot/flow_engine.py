@@ -160,6 +160,11 @@ async def _execute_node(
     elif node_type == "force_join_gate":
         missing = await missing_join_channels(bot, bot_id, message.from_user.id)
         if missing:
+            # Same as the guide_video pause below — stash what the caller
+            # needs to resume (which command's flow, or which legacy
+            # command) so bot/runtime.py:handle_force_join_check continues
+            # THIS walk instead of always restarting "/start".
+            await state.update_data(**resume_state_data)
             await message.answer(
                 "Please join the channel(s) below to use this bot, then tap "
                 "\"I've Joined\".",

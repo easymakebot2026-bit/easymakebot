@@ -338,7 +338,7 @@
 هستهٔ نمایش وضعیت `/live` — قدم‌به‌قدم:
 1. `built_bot` را با `live.get_built_bot(bot_id)` می‌خواند (توجه: این‌جا `bot_id` از `active_bot_id` در FSM state می‌آید که طبق کامنت `bot/live.py` از‌قبل تأییدشده است، پس استفادهٔ `get_built_bot` به‌جای `get_owned_built_bot` این‌جا درست است). اگر نبود پیام «Bot not found.».
 2. اگر `live.is_bot_suspended(built_bot)` باشد، پیام suspension (`live.suspension_status_text`) را **قبل از هرچیز دیگر** نمایش می‌دهد — همراه با توضیح که کاربر همچنان می‌تواند پلن‌ها را ببیند ولی حتی بعد از پرداخت موفق، بات آفلاین می‌ماند تا suspension برداشته شود. این دقیقاً همان قاعدهٔ اولویت `is_bot_suspended` قبل از `is_bot_expired` است که در `bot/live.py` تعریف شده.
-3. `show_trial = built_bot.live_until is None` — تست رایگان فقط وقتی نمایش داده می‌شود که بات هنوز اصلاً هیچ‌وقت لایو نشده (یک‌بارمصرف بودن با همین شرط تضمین می‌شود).
+3. `show_trial = built_bot.live_until is None and not user.trial_used` — تست رایگان فقط وقتی نمایش داده می‌شود که این بات هنوز هیچ‌وقت لایو نشده **و** خودِ کاربر (بر اساس `User.trial_used`، نه فقط این بات) قبلاً از تست رایگانش روی هیچ رباتی استفاده نکرده — این‌طوری حذف‌وساخت مجدد یه بات نمی‌تونه یه تست ۷۲ساعتهٔ تازه بسازه.
 4. با `platform_billing.resolve_region(user)` ریجن مالک را می‌خواند؛ اگر `None` (هنوز نامشخص)، سوال دوزبانه (انگلیسی/فارسی) «کجایی؟» را با `live_region_keyboard()` می‌فرستد و برمی‌گردد — بدون نمایش پلن‌ها تا وقتی ریجن مشخص شود.
 5. `methods = platform_billing.available_methods_for_region(region)` را می‌گیرد؛ `is_fa = region == "iran"`.
 6. `can_redeem = website_client.is_configured()` و `plans_url = _config.website_plans_url if can_redeem else None` — یعنی گزینهٔ «فعال‌سازی با کد» فقط وقتی نشان داده می‌شود که کلاینت وب‌سایت واقعاً پیکربندی شده باشد.
@@ -354,7 +354,7 @@
 
 ### `start_trial(callback, state)` — `@router.callback_query(F.data == "live:trial")`
 - **چه‌کار می‌کند:** جریان تست رایگان.
-- **مراحل:** `built_bot` را می‌خواند؛ اگر نبود خطا. **موارد خاص:** اگر `built_bot.live_until is not None` باشد (یعنی این بات قبلاً یک‌بار لایو شده — چه با تست، چه با پلن)، پیام «تست قبلاً استفاده شده» با `show_alert=True` نمایش داده می‌شود و اجرا متوقف می‌شود — این‌جا دقیقاً قاعدهٔ یک‌بارمصرف‌بودن trial اجرا می‌شود. در غیر این صورت `until = live.trial_until()`، سپس `live.set_live_until(built_bot.id, until)`، و اگر بات `suspended` نباشد `start_built_bot` صدا زده می‌شود تا واقعاً روی تلگرام روشن شود. در پایان پیام تبریک با تاریخ انقضا نشان داده می‌شود.
+- **مراحل:** `built_bot` را می‌خواند؛ اگر نبود خطا. **موارد خاص:** اگر `built_bot.live_until is not None` باشد (یعنی این بات قبلاً یک‌بار لایو شده — چه با تست، چه با پلن)، پیام «تست قبلاً استفاده شده» با `show_alert=True` نمایش داده می‌شود. **همچنین** مالک (`_get_user(callback.from_user.id)`) را می‌خواند و اگر `owner.trial_used` باشد (یعنی روی یکی دیگه از رباتهای همین شخص قبلاً تست گرفته شده)، همینجا رد می‌شود و کاربر رو به پلنهای پرداختی هدایت می‌کنه — این چک هست که جلوی حذف‌وساخت مجدد بات برای گرفتن تست‌های نامحدود رو می‌گیره. در غیر این صورت `until = live.trial_until()`، `live.set_live_until(built_bot.id, until)`، سپس `live.mark_trial_used(built_bot.owner_id)` (که `User.trial_used` رو برای همیشه `True` می‌کنه)، و اگر بات `suspended` نباشد `start_built_bot` صدا زده می‌شود تا واقعاً روی تلگرام روشن شود. در پایان پیام تبریک با تاریخ انقضا نشان داده می‌شود.
 
 ### جریان «فعال‌سازی با کد سایت»
 

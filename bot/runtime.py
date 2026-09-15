@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command as CommandFilter
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -161,13 +162,32 @@ async def _broadcast_to_subscribers(
 
     sent = 0
     for subscriber in subscribers:
-        try:
-            await message.copy_to(subscriber.telegram_id)
-            sent += 1
-        except Exception:
-            logger.warning(
-                "Failed to deliver broadcast (bot %s) to %s", bot_id, subscriber.telegram_id
-            )
+        # Telegram bots are limited to roughly 30 messages/second overall —
+        # a broadcast to a subscriber list anywhere near that size used to
+        # blow straight through the limit, and the resulting
+        # TelegramRetryAfter was swallowed by the bare `except Exception`
+        # below as a silent "failed to deliver" with no retry. One retry
+        # after honoring retry_after, plus a small per-send delay, keeps a
+        # big broadcast under the limit instead of losing messages to it.
+        for attempt in range(2):
+            try:
+                await message.copy_to(subscriber.telegram_id)
+                sent += 1
+                break
+            except TelegramRetryAfter as exc:
+                if attempt == 0:
+                    await asyncio.sleep(exc.retry_after)
+                    continue
+                logger.warning(
+                    "Flood-waited twice delivering broadcast (bot %s) to %s — giving up",
+                    bot_id, subscriber.telegram_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to deliver broadcast (bot %s) to %s", bot_id, subscriber.telegram_id
+                )
+                break
+        await asyncio.sleep(0.05)
 
     async with async_session_maker() as session:
         session.add(
@@ -383,6 +403,35 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
 
         await callback.answer("Thanks for joining! ✅")
         await callback.message.delete()
+
+        # Resume whatever command's flow/action the gate actually paused
+        # (stashed by flow_engine.py:_execute_node's force_join_gate branch)
+        # instead of always restarting "/start" — same resume markers and
+        # same "legacy command wins if present" precedence as
+        # _save_subscriber_phone_and_resume uses for the guide_video gate.
+        data = await state.get_data()
+        legacy_command_id = data.get("resume_legacy_command_id")
+        command = data.get("resume_flow_command", "/start")
+        await state.clear()
+
+        if legacy_command_id is not None:
+            async with async_session_maker() as session:
+                result = await session.execute(select(Command).where(Command.id == legacy_command_id))
+                legacy_command = result.scalar_one_or_none()
+            if legacy_command is not None and legacy_command.payload:
+                await _execute_node(
+                    bot, bot_id, legacy_command.payload.get("action"), legacy_command.payload,
+                    callback.message, state, {"resume_legacy_command_id": legacy_command.id},
+                )
+            return
+
+        if command != "/start":
+            # A non-/start Visual Builder flow was gated (handle_flow_command).
+            if built_bot and built_bot.flow_definition:
+                await run_flow(
+                    bot, bot_id, built_bot.flow_definition, command, callback.message, state
+                )
+            return
 
         if await _should_use_flow_for_start(bot_id, built_bot):
             await _register_subscriber(callback.from_user.id)

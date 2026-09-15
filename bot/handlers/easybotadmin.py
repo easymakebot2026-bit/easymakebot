@@ -70,13 +70,17 @@ async def _send_bot_detail(message: Message, bot_id: str) -> bool:
         f"Owner: {owner.telegram_id}",
         f"Status: {_bot_status_line(built_bot)}",
         f"Subscribers: {detail['subscriber_count']}",
-        f"Paid orders: {detail['paid_order_count']} — revenue: {detail['revenue_toman']:,} Toman",
+        f"Paid orders: {detail['paid_order_count']} — revenue: {detail['revenue_toman']:,} Toman"
+        + (f" + ${detail['revenue_usd']:,}" if detail.get("revenue_usd") else ""),
     ]
     if detail["orders_by_method"]:
         lines.append("By payment method:")
         for method, info in detail["orders_by_method"].items():
             label = _ORDER_METHOD_LABELS.get(method, method)
-            lines.append(f"  • {label}: {info['count']} orders — {info['revenue']:,} Toman")
+            # Stripe orders are stored in whole USD, every other method in
+            # Toman (bot/shop.py) — don't label a dollar figure "Toman".
+            unit = f"${info['revenue']:,}" if method == "stripe" else f"{info['revenue']:,} Toman"
+            lines.append(f"  • {label}: {info['count']} orders — {unit}")
     lines.append(f"Created: {built_bot.created_at:%Y-%m-%d}")
     await message.answer("\n".join(lines), reply_markup=admin_bot_detail_keyboard(built_bot))
     return True
@@ -121,7 +125,9 @@ async def show_stats(callback: CallbackQuery) -> None:
         "📦 Across all built bots' own storefronts (NOT your revenue):",
         f"Products: {stats['product_count']}",
         f"Orders: {stats['order_count']} ({stats['paid_order_count']} paid) — "
-        f"{stats['revenue_toman']:,} Toman total",
+        f"{stats['revenue_toman']:,} Toman"
+        + (f" + ${stats['shop_revenue_usd']:,}" if stats.get("shop_revenue_usd") else "")
+        + " total",
         "",
         "📰 Recent activity:",
     ]

@@ -1,6 +1,8 @@
+import asyncio
 import logging
 
 from aiogram import Router
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
@@ -39,11 +41,27 @@ async def send_broadcast(message: Message, state: FSMContext) -> None:
 
     sent = 0
     for owner in owners:
-        try:
-            await message.copy_to(owner.telegram_id)
-            sent += 1
-        except Exception:
-            logger.warning("Failed to deliver /send_to_all message to user %s", owner.telegram_id)
+        # Same flood-safety as bot/runtime.py:_broadcast_to_subscribers — at
+        # thousands of bot creators, sending flat-out will hit Telegram's
+        # ~30 msg/sec limit; without honoring TelegramRetryAfter, that error
+        # used to be swallowed here as a silent, permanent "failed to deliver".
+        for attempt in range(2):
+            try:
+                await message.copy_to(owner.telegram_id)
+                sent += 1
+                break
+            except TelegramRetryAfter as exc:
+                if attempt == 0:
+                    await asyncio.sleep(exc.retry_after)
+                    continue
+                logger.warning(
+                    "Flood-waited twice delivering /send_to_all to user %s — giving up",
+                    owner.telegram_id,
+                )
+            except Exception:
+                logger.warning("Failed to deliver /send_to_all message to user %s", owner.telegram_id)
+                break
+        await asyncio.sleep(0.05)
 
     await state.clear()
     await message.answer(f"Message sent to {sent} bot creator(s) ✅")

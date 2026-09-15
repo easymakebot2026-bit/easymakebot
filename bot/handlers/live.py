@@ -61,7 +61,10 @@ async def _send_live_status(message: Message, bot_id: str, telegram_id: int) -> 
         )
         await message.answer(f"{live.suspension_status_text(built_bot, is_fa)}{extra}")
 
-    show_trial = built_bot.live_until is None  # one-time — never offered again once used
+    # One-time per PERSON (User.trial_used), not per bot — see bot/live.py:
+    # mark_trial_used. A bot that already went live once (live_until is not
+    # None) never shows the trial button either way.
+    show_trial = built_bot.live_until is None and not (user.trial_used if user else False)
 
     if region is None:
         await message.answer(
@@ -156,8 +159,22 @@ async def start_trial(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer(text, show_alert=True)
         return
 
+    owner = await _get_user(callback.from_user.id)
+    if owner is not None and owner.trial_used:
+        text = (
+            "آزمایشی رایگانت قبلاً روی یکی دیگه از ربات‌هات مصرف شده — هر حساب فقط یه بار "
+            "می‌تونه از تست رایگان استفاده کنه. برای فعال‌سازی این ربات یکی از پلن‌های پرداختی "
+            "پایین رو انتخاب کن."
+            if is_fa
+            else "Your free trial has already been used on another one of your bots — each "
+            "account only gets one. Choose a payment plan below to activate this bot."
+        )
+        await callback.answer(text, show_alert=True)
+        return
+
     until = live.trial_until()
     built_bot = await live.set_live_until(built_bot.id, until)
+    await live.mark_trial_used(built_bot.owner_id)
     if not built_bot.suspended:
         start_built_bot(built_bot.id, built_bot.token)
 

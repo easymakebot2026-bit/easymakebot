@@ -248,6 +248,18 @@ async def choose_delivery_mode(message: Message, state: FSMContext) -> None:
 async def add_pool_items_start(callback: CallbackQuery, state: FSMContext) -> None:
     is_fa = await owner_prefers_persian(callback.from_user)
     product_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    bot_id = data.get("active_bot_id")
+    product = await shop.get_product(product_id)
+    if product is None or str(product.bot_id) != str(bot_id):
+        # Ownership check, same as select_product/delete_product below — this
+        # callback_data carries a bare product_id, so a forwarded/copied
+        # button from a DIFFERENT owner's product message must not be able to
+        # inject pool items into THIS bot's product just because it's the
+        # currently active bot in this user's own FSM state.
+        text = "محصول پیدا نشد." if is_fa else "Product not found."
+        await callback.answer(text, show_alert=True)
+        return
     await state.update_data(pool_target_product_id=product_id)
     await state.set_state(ShopStates.waiting_for_pool_items)
     text = (
