@@ -308,3 +308,15 @@ async def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS ix_built_bots_owner_id ON built_bots (owner_id)",
         ):
             await conn.execute(text(_index_sql))
+
+        # UI/UX pass (bot/db/models.py: BotSubscriber.muted, Product.category,
+        # CartItem.quantity) — see each column's docstring there.
+        await conn.execute(
+            text("ALTER TABLE bot_subscribers ADD COLUMN IF NOT EXISTS muted BOOLEAN NOT NULL DEFAULT false")
+        )
+        await conn.execute(
+            text("ALTER TABLE products ADD COLUMN IF NOT EXISTS category VARCHAR(100)")
+        )
+        await conn.execute(
+            text("ALTER TABLE cart_items ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1")
+        )

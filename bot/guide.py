@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from bot.config import load_config
 from bot.db.base import async_session_maker
-from bot.db.models import User
+from bot.db.models import BotSubscriber, User
 from bot.keyboards import video_keyboard
 
 _config = load_config()
@@ -87,6 +87,30 @@ async def owner_prefers_persian(tg_user: "TgUser") -> bool:
             )
         ).scalar_one_or_none()
     return is_iran_phone(phone)
+
+
+async def end_user_prefers_persian(bot_id, tg_user: "TgUser") -> bool:
+    """Persian vs English for one of a *built* bot's own subscribers/buyers —
+    not the same lookup as owner_prefers_persian above, which only ever
+    checks the platform's User table (bot owners). Prefers a phone number
+    already on file (same is_iran_phone signal used everywhere else);
+    someone who's never shared one yet — the common case for a first-ever
+    /start — falls back to their Telegram client's language, since no
+    phone-based signal exists for them at that point. Shared between
+    bot/runtime.py (which re-exports this as a bot_id-bound closure of the
+    same name for its own call sites) and bot/flow_engine.py, so both use
+    identical logic instead of two copies drifting apart."""
+    async with async_session_maker() as session:
+        phone = (
+            await session.execute(
+                select(BotSubscriber.phone_number).where(
+                    BotSubscriber.bot_id == bot_id, BotSubscriber.telegram_id == tg_user.id
+                )
+            )
+        ).scalar_one_or_none()
+    if phone is not None:
+        return is_iran_phone(phone)
+    return (tg_user.language_code or "").lower().startswith("fa")
 
 
 def phone_share_keyboard() -> ReplyKeyboardMarkup:

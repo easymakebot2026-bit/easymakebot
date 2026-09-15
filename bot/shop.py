@@ -196,6 +196,35 @@ async def get_standalone_products(bot_id: uuid.UUID) -> list[Product]:
         return list(result.scalars())
 
 
+# Buyer-facing product browsing: category picker + real pagination, used by
+# both bot/flow_engine.py's "shop" node and the shop_cat:*/shop_categories
+# callback handlers in bot/runtime.py. Kept here as pure (no Telegram/Bot)
+# helpers so both callers render identical lists from identical data.
+PRODUCTS_PAGE_SIZE = 10
+
+
+def product_categories(products: list[Product]) -> list[str]:
+    """Distinct, sorted category names among these products (Product.category
+    is optional free text set by the owner in the "add product" wizard).
+    Empty when no product in this list has a category set — callers should
+    fall back to a flat list in that case, so bots that never set categories
+    see no behavior change at all."""
+    return sorted({p.category for p in products if p.category})
+
+
+def paginate_products(
+    products: list[Product], page: int, page_size: int = PRODUCTS_PAGE_SIZE
+) -> tuple[list[Product], int, int]:
+    """Slices `products` for display. Returns (page_items, clamped_page,
+    total_pages). `page` is clamped into range so a stale/out-of-range page
+    number (e.g. the list shrank after a product sold out) degrades to the
+    nearest valid page instead of an empty screen or an index error."""
+    total_pages = max(1, (len(products) + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    start = page * page_size
+    return products[start : start + page_size], page, total_pages
+
+
 async def upsert_products_from_import(bot_id: uuid.UUID, items: list[dict]) -> dict:
     """Applies parsed rows (bot/shop_import.py:parse_products_workbook) to the
     Product table: a row with a Code matching an existing product (created by
@@ -601,9 +630,13 @@ async def get_cart_items(bot_id: uuid.UUID, buyer_telegram_id: int) -> list[tupl
         return [(ci, p) for ci, p in result.all()]
 
 
+MAX_CART_QUANTITY = 99  # sanity cap, not a business rule — just guards against fat-finger/abuse
+
+
 async def add_to_cart(bot_id: uuid.UUID, buyer_telegram_id: int, product_id: int) -> bool:
-    """Returns False (no-op) if the product doesn't belong to this bot, or
-    is already in the buyer's cart."""
+    """Returns False (no-op) if the product doesn't belong to this bot.
+    If the product is already in the buyer's cart, increments its quantity
+    (capped at MAX_CART_QUANTITY) instead of no-op'ing — see CartItem.quantity."""
     product = await get_product(product_id)
     if product is None or product.bot_id != bot_id:
         return False
@@ -616,13 +649,45 @@ async def add_to_cart(bot_id: uuid.UUID, buyer_telegram_id: int, product_id: int
                 CartItem.product_id == product_id,
             )
         )
-        if result.scalar_one_or_none() is not None:
-            return False
+        existing = result.scalar_one_or_none()
+        if existing is not None:
+            if existing.quantity < MAX_CART_QUANTITY:
+                existing.quantity += 1
+                await session.commit()
+            return True
         session.add(
-            CartItem(bot_id=bot_id, buyer_telegram_id=buyer_telegram_id, product_id=product_id)
+            CartItem(bot_id=bot_id, buyer_telegram_id=buyer_telegram_id, product_id=product_id, quantity=1)
         )
         await session.commit()
         return True
+
+
+async def change_cart_quantity(
+    cart_item_id: int, bot_id: uuid.UUID, buyer_telegram_id: int, delta: int
+) -> int | None:
+    """Adjusts a cart line's quantity by `delta` (+1/-1 from the ➕/➖
+    buttons). Deletes the row and returns 0 if the new quantity would be
+    <= 0. Returns None if the cart item doesn't exist / isn't this buyer's.
+    Clamped to [1, MAX_CART_QUANTITY] otherwise."""
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(CartItem).where(
+                CartItem.id == cart_item_id,
+                CartItem.bot_id == bot_id,
+                CartItem.buyer_telegram_id == buyer_telegram_id,
+            )
+        )
+        item = result.scalar_one_or_none()
+        if item is None:
+            return None
+        new_quantity = item.quantity + delta
+        if new_quantity <= 0:
+            await session.delete(item)
+            await session.commit()
+            return 0
+        item.quantity = min(new_quantity, MAX_CART_QUANTITY)
+        await session.commit()
+        return item.quantity
 
 
 async def remove_from_cart(cart_item_id: int, bot_id: uuid.UUID, buyer_telegram_id: int) -> None:
@@ -647,21 +712,27 @@ async def get_checkout(checkout_id: int) -> Checkout | None:
 
 
 async def create_checkout(bot_id: uuid.UUID, buyer_telegram_id: int) -> Checkout | None:
-    """Snapshots the buyer's cart into one Checkout + one Order per item
-    (price snapshotted, same as create_order), then empties the cart.
-    A cart item that's since sold out is dropped from the cart silently
-    instead of blocking checkout for the items still available — same
-    graceful-omit approach as everywhere else in this module.
-    Returns None if the cart is empty (or every item in it is sold out)."""
+    """Snapshots the buyer's cart into one Checkout + N quantity-1 Orders per
+    cart line (N = CartItem.quantity; price snapshotted, same as
+    create_order), then empties the cart. Order itself has no quantity
+    column — every existing fulfillment/inventory/pool-delivery/invoice path
+    assumes one Order == one unit, so a line with quantity=3 simply becomes
+    3 separate Order rows sharing this Checkout, rather than threading a
+    quantity value through all of that.
+    A cart line that's since sold out, or doesn't have enough stock left for
+    its full requested quantity, is dropped from the cart silently instead of
+    blocking checkout for the lines still available — same graceful-omit
+    approach as everywhere else in this module.
+    Returns None if the cart is empty (or every line in it is unavailable)."""
     items = await get_cart_items(bot_id, buyer_telegram_id)
     available = [
         (cart_item, product) for cart_item, product in items
-        if product.stock_quantity is None or product.stock_quantity > 0
+        if product.stock_quantity is None or product.stock_quantity >= cart_item.quantity
     ]
     if not available:
         return None
 
-    total_price = sum(product.price for _, product in available)
+    total_price = sum(product.price * cart_item.quantity for cart_item, product in available)
     settings = await get_shop_settings(bot_id)
     tax_amount = _compute_tax(total_price, settings)
 
@@ -674,21 +745,23 @@ async def create_checkout(bot_id: uuid.UUID, buyer_telegram_id: int) -> Checkout
         await session.flush()  # assign checkout.id before linking orders
 
         for cart_item, product in available:
-            session.add(
-                Order(
-                    bot_id=bot_id,
-                    product_id=product.id,
-                    buyer_telegram_id=buyer_telegram_id,
-                    price=product.price,
-                    checkout_id=checkout.id,
+            for _ in range(cart_item.quantity):
+                session.add(
+                    Order(
+                        bot_id=bot_id,
+                        product_id=product.id,
+                        buyer_telegram_id=buyer_telegram_id,
+                        price=product.price,
+                        checkout_id=checkout.id,
+                    )
                 )
-            )
             await session.delete(cart_item)
 
-        # A sold-out item left in the cart (not in `available`) is dropped
-        # here too, so it doesn't linger and confuse the next checkout attempt.
+        # A line left in the cart (not in `available` — sold out, or not
+        # enough stock for its full quantity) is dropped here too, so it
+        # doesn't linger and confuse the next checkout attempt.
         for cart_item, product in items:
-            if product.stock_quantity is not None and product.stock_quantity <= 0:
+            if product.stock_quantity is not None and product.stock_quantity < cart_item.quantity:
                 await session.delete(cart_item)
 
         await session.commit()
@@ -2068,11 +2141,19 @@ async def generate_invoice(order: Order) -> bytes:
 
 async def generate_checkout_invoice(checkout: Checkout, orders: list[Order]) -> bytes:
     """Combined invoice for every Order under one Checkout — see
-    fulfill_checkout, which is the only real caller."""
+    fulfill_checkout, which is the only real caller.
+
+    A cart line bought with quantity > 1 (bot/shop.py:create_checkout) becomes
+    several same-product, same-price Orders under this one Checkout — grouped
+    back into a single "Product x N" invoice line here rather than printing
+    N identical rows."""
     products = [await get_product(o.product_id) for o in orders]
-    items = [
-        (product.name if product else "-", 1, o.price) for o, product in zip(orders, products)
-    ]
+    grouped: dict[int, list] = {}  # product_id -> [name, quantity, unit_price]
+    for order, product in zip(orders, products):
+        name = product.name if product else "-"
+        row = grouped.setdefault(order.product_id, [name, 0, order.price])
+        row[1] += 1
+    items = [(name, qty, unit_price) for name, qty, unit_price in grouped.values()]
     is_en = checkout.payment_method == "stripe"
     return await _render_invoice_pdf(
         bot_id=checkout.bot_id,

@@ -332,6 +332,14 @@ class BotSubscriber(Base):
     # permanent grant. None = never subscribed / subscription lapsed.
     subscription_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # True = this subscriber opted out of group broadcasts (owner's
+    # /send_to_all-equivalent and _broadcast_to_subscribers in bot/runtime.py)
+    # via the "🔕 Stop broadcasts" command/button. Does NOT affect direct
+    # replies to something the subscriber sent (comments, order updates) —
+    # only the group-broadcast fan-out skips muted rows. Any fresh /start
+    # clears this back to False (re-engaging the bot implies opting back in).
+    muted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -419,6 +427,12 @@ class Product(Base):
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text)
     price: Mapped[int] = mapped_column(Integer)  # Toman
+    # Free-text label the owner can set per product to group the buyer-facing
+    # list into sections (bot/flow_engine.py's shop branch shows a category
+    # picker first when at least one product on the bot has this set; NULL/
+    # empty products fall into an "Other" bucket). NULL for every product on
+    # a bot = the old flat list, unchanged, so this is fully backward-compatible.
+    category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # Set only while a price campaign is running (PriceCampaign below): the
     # pre-campaign price, restored verbatim when the campaign ends. NULL the
     # rest of the time. Customer-facing views show it struck-through next to
@@ -680,6 +694,15 @@ class CartItem(Base):
     bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("built_bots.id"))
     buyer_telegram_id: Mapped[int] = mapped_column(BigInteger)
     product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+
+    # How many units of this product the buyer wants. Order itself has no
+    # quantity column (every existing fulfillment/inventory/pool-delivery/
+    # invoice path in bot/shop.py assumes one Order == one unit) — rather than
+    # thread quantity through all of that, bot/shop.py:create_checkout fans a
+    # CartItem with quantity=N out into N separate quantity-1 Orders at
+    # checkout time, so all of that existing (and recently hardened) logic
+    # keeps working completely unchanged.
+    quantity: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

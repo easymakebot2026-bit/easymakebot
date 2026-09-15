@@ -14,18 +14,40 @@ from sqlalchemy import func, select
 from bot.db.base import async_session_maker
 from bot.db.models import ContentItem
 
-LIST_LIMIT = 40  # Telegram's practical inline-keyboard limit
+LIST_LIMIT = 40  # Telegram's practical inline-keyboard limit — used as-is by
+# get_all_items (the owner's flat parent-picker list) and as get_children's
+# default cap for any caller that doesn't ask for a specific page.
+CONTENT_PAGE_SIZE = 10  # buyer-facing browsing page size — see
+# bot/runtime.py:_send_content_children and bot/flow_engine.py's
+# content_list node, which page through get_children with this instead of
+# silently truncating at LIST_LIMIT.
 
 
-async def get_children(bot_id: uuid.UUID, parent_id: int | None) -> list[ContentItem]:
+async def get_children(
+    bot_id: uuid.UUID, parent_id: int | None, *, offset: int = 0, limit: int = LIST_LIMIT
+) -> list[ContentItem]:
     async with async_session_maker() as session:
         result = await session.execute(
             select(ContentItem)
             .where(ContentItem.bot_id == bot_id, ContentItem.parent_id == parent_id)
             .order_by(ContentItem.position, ContentItem.id)
-            .limit(LIST_LIMIT)
+            .offset(offset)
+            .limit(limit)
         )
         return list(result.scalars())
+
+
+async def count_children(bot_id: uuid.UUID, parent_id: int | None) -> int:
+    """Total children under `parent_id` (unpaginated) — paired with
+    get_children(offset=..., limit=...) so callers can compute total pages
+    and show/hide ◀️/▶️ without fetching everything."""
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(func.count())
+            .select_from(ContentItem)
+            .where(ContentItem.bot_id == bot_id, ContentItem.parent_id == parent_id)
+        )
+        return result.scalar_one()
 
 
 async def folder_ids_among(bot_id: uuid.UUID, item_ids: list[int]) -> set[int]:

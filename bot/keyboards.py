@@ -553,11 +553,13 @@ def content_menu_keyboard(
     *,
     select_prefix: str,
     back_button: InlineKeyboardButton | None = None,
+    extra_rows: list[list[InlineKeyboardButton]] | None = None,
 ) -> InlineKeyboardMarkup:
     """One row per item (see content_item_label). `select_prefix` is the
     callback_data stem the item id is appended to (e.g. "content_item:" at
-    runtime, "content:select:" in the owner tool). `back_button`, if given,
-    is added as the last row."""
+    runtime, "content:select:" in the owner tool). `extra_rows`, if given,
+    is inserted after the items (e.g. a ◀️/▶️ pagination row) and before
+    `back_button`, which — if given — is added as the very last row."""
     folder_ids = folder_ids or set()
     rows = [
         [
@@ -568,6 +570,8 @@ def content_menu_keyboard(
         ]
         for item in items
     ]
+    if extra_rows:
+        rows.extend(extra_rows)
     if back_button is not None:
         rows.append([back_button])
     return InlineKeyboardMarkup(inline_keyboard=rows)

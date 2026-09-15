@@ -73,6 +73,14 @@ CORE_FIELDS = [
         "prompt_fa": "آدرس تصویر رو وارد کن (اختیاری).",
         "optional": True,
     },
+    {
+        "key": "category",
+        "prompt_en": "Enter a category name for this product (optional) — buyers will be able to "
+        "filter by it, e.g. \"Courses\" or \"Templates\".",
+        "prompt_fa": "یه دسته‌بندی برای این محصول وارد کن (اختیاری) — خریدارها می‌تونن بر اساس اون "
+        "فیلتر کنن، مثلاً «دوره‌ها» یا «قالب‌ها».",
+        "optional": True,
+    },
 ]
 
 
@@ -174,6 +182,7 @@ async def _save_product(message: Message, state: FSMContext, is_fa: bool) -> Non
             description=payload.get("description") or "",
             price=price,
             image_url=payload.get("image_url"),
+            category=(payload.get("category") or "").strip() or None,
             product_type=product_type,
             delivery_text=payload.get("delivery_text"),
             delivery_file_url=payload.get("delivery_file_url"),
