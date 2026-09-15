@@ -454,6 +454,28 @@ class Product(Base):
     # NULL for products created by hand or by the old Content List importer.
     import_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
+    # Alternate ways to fulfill a "digital" order beyond the static
+    # delivery_text/delivery_file_url above (same value sent to every
+    # buyer): "pool" hands out one never-repeating ProductDeliveryItem per
+    # order; "api" fetches a fresh code/link per order from the owner's own
+    # HTTP endpoint. See bot/shop.py:fulfill_order / _deliver_digital_product.
+    delivery_mode: Mapped[str] = mapped_column(String(20), default="static", server_default="static")
+
+    # --- delivery_mode == "api" only ---
+    delivery_api_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    delivery_api_method: Mapped[str | None] = mapped_column(String(10), nullable=True)  # "GET" | "POST"
+    delivery_api_headers: Mapped[dict[str, Any] | None] = mapped_column(EncryptedJSON, nullable=True)
+    # {{placeholder}} template, substituted via str.replace (not str.format —
+    # the body is typically JSON, whose own braces would collide with it).
+    delivery_api_body_template: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Dotted path into the JSON response to pull the deliverable value from
+    # (e.g. "data.config_url") — see bot/shop.py:_extract_by_path. Empty/NULL
+    # means "use the raw response body".
+    delivery_api_response_path: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Extra {{placeholder}} values the owner defines per product (custom
+    # duration/volume/etc.), merged with the base order fields at call time.
+    delivery_api_extra_vars: Mapped[dict[str, Any] | None] = mapped_column(EncryptedJSON, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -462,6 +484,32 @@ class Product(Base):
     )
 
     bot: Mapped["BuiltBot"] = relationship(back_populates="products")
+
+
+class ProductDeliveryItem(Base):
+    """One pre-loaded, single-use payload (a license key, VPN config, gift
+    code, etc.) for a Product with delivery_mode == "pool". Handed out one
+    row per paid order, atomically claimed (SELECT ... FOR UPDATE SKIP
+    LOCKED — see bot/shop.py:_assign_pool_item) so two concurrent
+    fulfillments can never receive the same item, and never reused once
+    assigned. payload is encrypted at rest, matching the convention for
+    other sensitive columns in this file (e.g. ShopSettings' secret keys)."""
+
+    __tablename__ = "product_delivery_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+    payload: Mapped[str] = mapped_column(EncryptedString)
+
+    # "available" -> "assigned" (never reused, never deleted — kept for
+    # audit, same as ContentUnlock/Order history elsewhere in this file).
+    status: Mapped[str] = mapped_column(String(20), default="available", server_default="available")
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"), nullable=True)
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class ShopSettings(Base):
@@ -588,6 +636,12 @@ class Order(Base):
     shipping_postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     invoice_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
+    # Set when delivery_mode "pool"/"api" fulfillment failed (empty pool, or
+    # a non-2xx/malformed API response) — the owner is alerted with a Retry
+    # button (bot/runtime.py:handle_retry_delivery -> bot/shop.py:retry_delivery)
+    # and the order stays "paid" (not "fulfilled") until it succeeds.
+    fulfillment_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Set only for an order created via the cart's "Checkout" step (bot/shop.py:
     # create_checkout) — None for every direct "🛒 Buy" purchase. Several

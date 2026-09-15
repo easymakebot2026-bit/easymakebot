@@ -244,3 +244,39 @@ async def init_db() -> None:
             text("ALTER TABLE commands ADD COLUMN IF NOT EXISTS "
                  "visibility VARCHAR(10) NOT NULL DEFAULT 'everyone'")
         )
+        # Alternate digital delivery: a pre-loaded single-use item pool, or a
+        # live API call, per Product — see bot/db/models.py:Product,
+        # ProductDeliveryItem and bot/shop.py:fulfill_order.
+        await conn.execute(
+            text("ALTER TABLE products ADD COLUMN IF NOT EXISTS "
+                 "delivery_mode VARCHAR(20) NOT NULL DEFAULT 'static'")
+        )
+        await conn.execute(
+            text("ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_api_url VARCHAR(500)")
+        )
+        await conn.execute(
+            text("ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_api_method VARCHAR(10)")
+        )
+        await conn.execute(
+            text("ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_api_headers BYTEA")
+        )
+        await conn.execute(
+            text("ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_api_body_template TEXT")
+        )
+        await conn.execute(
+            text("ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_api_response_path VARCHAR(200)")
+        )
+        await conn.execute(
+            text("ALTER TABLE products ADD COLUMN IF NOT EXISTS delivery_api_extra_vars BYTEA")
+        )
+        await conn.execute(
+            text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS fulfillment_error TEXT")
+        )
+        # product_delivery_items is a new table, created by create_all above —
+        # this only adds the lookup index fulfillment queries rely on.
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_product_delivery_items_product_status "
+                "ON product_delivery_items (product_id, status)"
+            )
+        )

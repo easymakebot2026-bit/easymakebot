@@ -55,6 +55,14 @@ class ShopStates(StatesGroup):
     waiting_for_invoice_business_phone = State()
     waiting_for_invoice_signature_url = State()
     waiting_for_import_file = State()
+    # Alternate digital-delivery setup (bot/db/models.py:Product.delivery_mode)
+    # during the Add Product wizard, or topping up an existing pool product.
+    waiting_for_pool_items = State()
+    waiting_for_api_url = State()
+    waiting_for_api_headers = State()
+    waiting_for_api_body_template = State()
+    waiting_for_api_response_path = State()
+    waiting_for_api_extra_vars = State()
 
 
 class AdminBroadcastStates(StatesGroup):

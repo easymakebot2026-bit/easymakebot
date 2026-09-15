@@ -1130,21 +1130,34 @@ def shop_products_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def shop_product_detail_keyboard(product_id: int, is_fa: bool = False) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def shop_product_detail_keyboard(
+    product_id: int, is_fa: bool = False, show_pool_button: bool = False
+) -> InlineKeyboardMarkup:
+    rows = []
+    if show_pool_button:
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text=("🗑 حذف" if is_fa else "🗑 Delete"), callback_data=f"shop:delete:{product_id}"
+                    text=("➕ افزودن به استخر" if is_fa else "➕ Add to Pool"),
+                    callback_data=f"shop:add_pool:{product_id}",
                 )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=("🔙 بازگشت" if is_fa else "🔙 Back"), callback_data="shop:products"
-                )
-            ],
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=("🗑 حذف" if is_fa else "🗑 Delete"), callback_data=f"shop:delete:{product_id}"
+            )
         ]
     )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=("🔙 بازگشت" if is_fa else "🔙 Back"), callback_data="shop:products"
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def shop_product_type_keyboard(is_fa: bool = False) -> ReplyKeyboardMarkup:
@@ -1159,6 +1172,43 @@ def shop_product_type_keyboard(is_fa: bool = False) -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=labels["physical"]), KeyboardButton(text=labels["digital"])],
             [KeyboardButton(text=labels["access"])],
+            [KeyboardButton(text=cancel_button_text(is_fa))],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def delivery_mode_button_texts(is_fa: bool = False) -> dict[str, str]:
+    """key -> button label for the Add Product wizard's "how should this
+    digital product be delivered?" step (bot/handlers/tools/shop.py)."""
+    if is_fa:
+        return {
+            "static": "📄 لینک/متن ثابت",
+            "pool": "📦 استخر آیتم (یکی برای هر سفارش)",
+            "api": "🔌 تماس زنده با API",
+        }
+    return {
+        "static": "📄 Static link/text",
+        "pool": "📦 Item pool (one per order)",
+        "api": "🔌 Live API call",
+    }
+
+
+def delivery_mode_button_to_key() -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for is_fa in (False, True):
+        for key, label in delivery_mode_button_texts(is_fa).items():
+            mapping[label] = key
+    return mapping
+
+
+def shop_delivery_mode_keyboard(is_fa: bool = False) -> ReplyKeyboardMarkup:
+    labels = delivery_mode_button_texts(is_fa)
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=labels["static"])],
+            [KeyboardButton(text=labels["pool"])],
+            [KeyboardButton(text=labels["api"])],
             [KeyboardButton(text=cancel_button_text(is_fa))],
         ],
         resize_keyboard=True,
@@ -1493,6 +1543,7 @@ def admin_bot_detail_keyboard(built_bot) -> InlineKeyboardMarkup:
             suspend_row,
             [InlineKeyboardButton(text="🎁 Grant Access", callback_data=f"admin:grant:{built_bot.id}")],
             [InlineKeyboardButton(text="✏️ Rename", callback_data=f"admin:rename:{built_bot.id}")],
+            [InlineKeyboardButton(text="📥 Export Report (Excel)", callback_data=f"admin:export_bot:{built_bot.id}")],
             [InlineKeyboardButton(text="🗑 Delete Bot", callback_data=f"admin:delete:{built_bot.id}")],
             [InlineKeyboardButton(text="🔙 Back to Bots", callback_data="admin:bots")],
         ]

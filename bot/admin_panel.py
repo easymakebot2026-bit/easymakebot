@@ -17,7 +17,7 @@ from openpyxl import Workbook
 from sqlalchemy import func, select
 
 from bot.db.base import async_session_maker
-from bot.db.models import BotSubscriber, BuiltBot, Order, Product, User
+from bot.db.models import BotSubscriber, BuiltBot, LivePayment, Order, Product, User
 from bot.platform_settings import bots_enabled as _bots_enabled
 from bot.platform_settings import set_bots_enabled as _set_bots_enabled
 from bot.runtime import start_built_bot, stop_built_bot
@@ -49,6 +49,35 @@ async def get_platform_stats() -> dict:
         )
         paid_order_count, revenue = result.one()
 
+        live_result = await session.execute(
+            select(
+                LivePayment.payment_method,
+                func.count(LivePayment.id),
+                func.coalesce(func.sum(LivePayment.price), 0),
+            )
+            .where(LivePayment.status == "paid")
+            .group_by(LivePayment.payment_method)
+        )
+        platform_revenue_toman = 0
+        platform_revenue_usd = 0
+        platform_revenue_ton_usd = 0
+        platform_paid_count_toman = 0
+        platform_paid_count_usd = 0
+        platform_paid_count_ton = 0
+        for method, count, total in live_result.all():
+            if method == "zarinpal":
+                platform_revenue_toman = int(total)
+                platform_paid_count_toman = count
+            elif method == "stripe":
+                platform_revenue_usd = int(total)
+                platform_paid_count_usd = count
+            elif method == "ton":
+                platform_revenue_ton_usd = int(total)
+                platform_paid_count_ton = count
+        platform_paid_count = (
+            platform_paid_count_toman + platform_paid_count_usd + platform_paid_count_ton
+        )
+
     return {
         "user_count": user_count,
         "bot_count": bot_count,
@@ -61,6 +90,13 @@ async def get_platform_stats() -> dict:
         "order_count": order_count,
         "paid_order_count": paid_order_count,
         "revenue_toman": int(revenue),
+        "platform_revenue_toman": platform_revenue_toman,
+        "platform_revenue_usd": platform_revenue_usd,
+        "platform_revenue_ton_usd": platform_revenue_ton_usd,
+        "platform_paid_count": platform_paid_count,
+        "platform_paid_count_toman": platform_paid_count_toman,
+        "platform_paid_count_usd": platform_paid_count_usd,
+        "platform_paid_count_ton": platform_paid_count_ton,
     }
 
 
@@ -116,12 +152,27 @@ async def get_bot_detail(bot_id: uuid.UUID | str) -> dict | None:
         )
         paid_order_count, revenue = order_result.one()
 
+        method_result = await session.execute(
+            select(
+                Order.payment_method,
+                func.count(Order.id),
+                func.coalesce(func.sum(Order.price), 0),
+            )
+            .where(Order.bot_id == bot_id, Order.status.in_(PAID_STATUSES))
+            .group_by(Order.payment_method)
+        )
+        orders_by_method = {
+            (method or "unknown"): {"count": count, "revenue": int(total)}
+            for method, count, total in method_result.all()
+        }
+
     return {
         "bot": built_bot,
         "owner": owner,
         "subscriber_count": subscriber_count,
         "paid_order_count": paid_order_count,
         "revenue_toman": int(revenue),
+        "orders_by_method": orders_by_method,
     }
 
 
@@ -298,6 +349,77 @@ async def generate_report_excel() -> bytes:
                     order.payment_method or "-", str(order.created_at),
                 ]
             )
+
+        ws_live = wb.create_sheet("Platform Revenue (Live)")
+        ws_live.append(
+            ["Payment ID", "Bot Username", "Plan", "Price", "Currency", "Payment Method", "Status", "Created At"]
+        )
+        live_result = await session.execute(
+            select(LivePayment, BuiltBot.bot_username)
+            .join(BuiltBot, BuiltBot.id == LivePayment.bot_id)
+            .order_by(LivePayment.created_at.desc())
+        )
+        for payment, bot_username in live_result.all():
+            ws_live.append(
+                [
+                    payment.id, bot_username, payment.plan_key, payment.price, payment.currency.upper(),
+                    payment.payment_method, payment.status, str(payment.created_at),
+                ]
+            )
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue()
+
+
+async def generate_bot_report_excel(bot_id: uuid.UUID | str) -> bytes | None:
+    """Per-bot Excel export - that bot's own shop orders only (money for the
+    BOT OWNER, not the platform). Scoped Orders sheet + a payment-method
+    summary sheet."""
+    async with async_session_maker() as session:
+        bot_result = await session.execute(select(BuiltBot).where(BuiltBot.id == bot_id))
+        built_bot = bot_result.scalar_one_or_none()
+        if built_bot is None:
+            return None
+
+        wb = Workbook()
+        ws_orders = wb.active
+        ws_orders.title = "Orders"
+        ws_orders.append(
+            [
+                "Order ID", "Product", "Price", "Currency", "Status", "Payment Method",
+                "Buyer Telegram ID", "Invoice #", "Created At",
+            ]
+        )
+        result = await session.execute(
+            select(Order, Product.name)
+            .join(Product, Product.id == Order.product_id)
+            .where(Order.bot_id == bot_id)
+            .order_by(Order.created_at.desc())
+        )
+        rows = result.all()
+        for order, product_name in rows:
+            currency = "USD" if order.payment_method == "stripe" else "Toman"
+            ws_orders.append(
+                [
+                    order.id, product_name, order.price, currency, order.status,
+                    order.payment_method or "-", order.buyer_telegram_id,
+                    order.invoice_number or "-", str(order.created_at),
+                ]
+            )
+
+        ws_summary = wb.create_sheet("Summary by Method")
+        ws_summary.append(["Payment Method", "Paid Orders", "Revenue"])
+        by_method: dict[str, list[int]] = {}
+        for order, _ in rows:
+            if order.status not in PAID_STATUSES:
+                continue
+            key = order.payment_method or "unknown"
+            entry = by_method.setdefault(key, [0, 0])
+            entry[0] += 1
+            entry[1] += order.price
+        for method, (count, total) in by_method.items():
+            ws_summary.append([method, count, total])
 
     buffer = io.BytesIO()
     wb.save(buffer)

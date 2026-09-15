@@ -24,7 +24,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from bot import pricing
 from bot.db.base import async_session_maker
@@ -38,11 +38,19 @@ from bot.db.models import (
     Order,
     PriceCampaign,
     Product,
+    ProductDeliveryItem,
     ShopSettings,
+    User,
 )
 from bot.session import make_session
 
 CONTENT_UNLOCK_TYPE = "content_unlock"
+
+# Product.delivery_mode values ("digital" products only) — see
+# bot/db/models.py:Product and fulfill_order/_deliver_digital_product below.
+DELIVERY_MODE_STATIC = "static"
+DELIVERY_MODE_POOL = "pool"
+DELIVERY_MODE_API = "api"
 
 logger = logging.getLogger(__name__)
 
@@ -1205,6 +1213,268 @@ async def _decrement_stock(product_id: int) -> None:
         await session.commit()
 
 
+# --- Alternate "digital" delivery: pre-loaded item pool, or a live API call
+# per order (bot/db/models.py:Product.delivery_mode) — deliberately generic,
+# not specific to any one kind of product (license keys, VPN configs, gift
+# codes, ...). See bot/handlers/tools/shop.py for the owner-facing wizard. ---
+
+
+async def _get_owner_telegram_id(bot_id: uuid.UUID) -> int | None:
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(User.telegram_id).join(BuiltBot, BuiltBot.owner_id == User.id).where(BuiltBot.id == bot_id)
+        )
+        return result.scalar_one_or_none()
+
+
+async def add_pool_items(product_id: int, payloads: list[str]) -> int:
+    """Adds one ProductDeliveryItem per non-empty payload (pasted text, one
+    per line, or parsed from an uploaded file — bot/handlers/tools/shop.py).
+    Returns how many were added."""
+    cleaned = [p.strip() for p in payloads if p and p.strip()]
+    if not cleaned:
+        return 0
+    async with async_session_maker() as session:
+        for payload in cleaned:
+            session.add(ProductDeliveryItem(product_id=product_id, payload=payload))
+        await session.commit()
+    return len(cleaned)
+
+
+async def pool_counts(product_id: int) -> dict[str, int]:
+    """{"available": n, "assigned": n} for this product's item pool."""
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(ProductDeliveryItem.status, func.count())
+            .where(ProductDeliveryItem.product_id == product_id)
+            .group_by(ProductDeliveryItem.status)
+        )
+        counts = {status: n for status, n in result.all()}
+    return {"available": counts.get("available", 0), "assigned": counts.get("assigned", 0)}
+
+
+async def _assign_pool_item(product_id: int, order_id: int) -> str | None:
+    """Atomically claims one "available" item for this order — SKIP LOCKED
+    so two concurrent fulfillments (e.g. a retry racing the original attempt)
+    can never be handed the same payload. Returns the payload, or None if
+    the pool is empty."""
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(ProductDeliveryItem)
+            .where(ProductDeliveryItem.product_id == product_id, ProductDeliveryItem.status == "available")
+            .order_by(ProductDeliveryItem.id)
+            .limit(1)
+            .with_for_update(skip_locked=True)
+        )
+        item = result.scalar_one_or_none()
+        if item is None:
+            return None
+        item.status = "assigned"
+        item.order_id = order_id
+        item.assigned_at = datetime.now(timezone.utc)
+        payload = item.payload
+        await session.commit()
+    return payload
+
+
+async def _notify_owner_delivery_failed(bot: Bot, order: Order, product: Product, reason: str) -> None:
+    """Alerts the bot owner (never left to notice a stuck order on their
+    own) with a one-tap Retry button — bot/runtime.py:handle_retry_delivery
+    calls back into retry_delivery below."""
+    owner_telegram_id = await _get_owner_telegram_id(order.bot_id)
+    if owner_telegram_id is None:
+        return
+    try:
+        await bot.send_message(
+            owner_telegram_id,
+            f"⚠️ Delivery failed for order #{order.id} (\"{product.name}\"): {reason}\n"
+            "The buyer has been told their delivery is delayed. Fix the issue, then retry:",
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="🔁 Retry Delivery", callback_data=f"retry_delivery:{order.id}")]
+                ]
+            ),
+        )
+    except Exception:
+        logger.warning("Failed to notify owner about delivery failure for order %s", order.id)
+
+
+def _render_template(template: str, variables: dict[str, object]) -> str:
+    """Naive {{key}} substitution via str.replace — deliberately not
+    str.format(), since the template body is typically JSON and .format()'s
+    ordinary { } braces would collide with JSON's own."""
+    rendered = template
+    for key, value in variables.items():
+        rendered = rendered.replace("{{" + key + "}}", "" if value is None else str(value))
+    return rendered
+
+
+def _extract_by_path(data: object, path: str) -> object:
+    """Walks a dotted path (e.g. "data.config_url") through a parsed JSON
+    response. Returns None if any segment is missing/not indexable."""
+    current = data
+    for part in path.split("."):
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list):
+            try:
+                current = current[int(part)]
+            except (ValueError, IndexError):
+                return None
+        else:
+            return None
+    return current
+
+
+async def _deliver_via_api(order: Order, product: Product) -> tuple[bool, str | None]:
+    """Calls the owner's configured endpoint to fetch a fresh code/link for
+    this order. Returns (True, value) on success, or (False, error) — the
+    caller records the error and notifies buyer/owner."""
+    variables = {
+        "order_id": order.id,
+        "buyer_telegram_id": order.buyer_telegram_id,
+        "product_id": product.id,
+        "product_name": product.name,
+        "product_description": product.description,
+        "price": order.price,
+    }
+    variables.update(product.delivery_api_extra_vars or {})
+
+    method = (product.delivery_api_method or "POST").upper()
+    headers = product.delivery_api_headers or {}
+    body = _render_template(product.delivery_api_body_template or "", variables)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.request(
+                method,
+                product.delivery_api_url,
+                headers=headers,
+                data=body or None,
+                timeout=aiohttp.ClientTimeout(total=20),
+            ) as resp:
+                text_body = await resp.text()
+                if resp.status < 200 or resp.status >= 300:
+                    return False, f"API returned status {resp.status}"
+                try:
+                    data = await resp.json(content_type=None)
+                except Exception:
+                    data = None
+    except Exception as exc:
+        logger.exception("Live API delivery call failed for order %s", order.id)
+        return False, f"request failed: {exc}"
+
+    if product.delivery_api_response_path:
+        value = _extract_by_path(data, product.delivery_api_response_path) if data is not None else None
+        if value is None:
+            return False, "response didn't contain the configured field"
+        return True, str(value)
+
+    return True, text_body
+
+
+async def _deliver_digital_product(bot: Bot, order: Order, product: Product) -> bool:
+    """Dispatches a "digital" order's delivery per Product.delivery_mode.
+    Returns True if delivered (fulfill_order proceeds to invoice), or False
+    if delivery failed — buyer and owner have already been notified, and the
+    caller must stop (order stays "paid", not "fulfilled")."""
+    mode = product.delivery_mode or DELIVERY_MODE_STATIC
+
+    if mode == DELIVERY_MODE_POOL:
+        payload = await _assign_pool_item(product.id, order.id)
+        if payload is None:
+            await bot.send_message(
+                order.buyer_telegram_id,
+                f"✅ Payment confirmed for \"{product.name}\". Delivery is delayed — "
+                "we'll send it to you shortly.",
+            )
+            await _notify_owner_delivery_failed(bot, order, product, "the item pool is empty")
+            return False
+        parts = [f"✅ Payment confirmed for \"{product.name}\"."]
+        if product.delivery_text:
+            parts.append(product.delivery_text)
+        await bot.send_message(order.buyer_telegram_id, "\n\n".join(parts))
+        await bot.send_message(order.buyer_telegram_id, payload)
+        return True
+
+    if mode == DELIVERY_MODE_API:
+        ok, result = await _deliver_via_api(order, product)
+        if not ok:
+            async with async_session_maker() as session:
+                await session.execute(
+                    update(Order).where(Order.id == order.id).values(fulfillment_error=result)
+                )
+                await session.commit()
+            await bot.send_message(
+                order.buyer_telegram_id,
+                f"✅ Payment confirmed for \"{product.name}\". Delivery is delayed — "
+                "we'll send it to you shortly.",
+            )
+            await _notify_owner_delivery_failed(bot, order, product, result or "the API call failed")
+            return False
+        parts = [f"✅ Payment confirmed for \"{product.name}\"."]
+        if product.delivery_text:
+            parts.append(product.delivery_text)
+        await bot.send_message(order.buyer_telegram_id, "\n\n".join(parts))
+        await bot.send_message(order.buyer_telegram_id, result)
+        return True
+
+    # DELIVERY_MODE_STATIC — same shared link/text sent to every buyer.
+    parts = [f"✅ Payment confirmed for \"{product.name}\"."]
+    if product.delivery_text:
+        parts.append(product.delivery_text)
+    await bot.send_message(order.buyer_telegram_id, "\n\n".join(parts))
+    if product.delivery_file_url:
+        await bot.send_message(order.buyer_telegram_id, f"🔗 {product.delivery_file_url}")
+    return True
+
+
+async def _finalize_fulfillment(bot: Bot, order: Order, send_invoice: bool = True) -> None:
+    """Marks `order` fulfilled and (unless send_invoice=False) issues its
+    invoice — the shared tail every successful delivery path in fulfill_order
+    falls through to, also reused by retry_delivery below on a successful
+    retry."""
+    async with async_session_maker() as session:
+        result = await session.execute(select(Order).where(Order.id == order.id))
+        row = result.scalar_one()
+        row.status = "fulfilled"
+        row.invoice_number = row.invoice_number or _invoice_number(row)
+        row.fulfillment_error = None
+        await session.commit()
+        await session.refresh(row)
+        order = row
+
+    if not send_invoice:
+        return
+
+    invoice_pdf = await generate_invoice(order)
+    await bot.send_document(
+        order.buyer_telegram_id,
+        BufferedInputFile(invoice_pdf, filename=f"invoice-{order.invoice_number}.pdf"),
+        caption="🧾 Invoice",
+    )
+
+
+async def retry_delivery(bot: Bot, order_id: int) -> bool:
+    """Re-attempts pool/API delivery for an order the owner tapped "🔁 Retry
+    Delivery" on (bot/runtime.py:handle_retry_delivery). Returns True if it
+    now succeeded (and finalizes the order), False if it's still failing
+    (the owner has already been re-notified with another Retry button)."""
+    order = await get_order(order_id)
+    if order is None or order.status != "paid":
+        return False
+    product = await get_product(order.product_id)
+    if product is None:
+        return False
+
+    delivered = await _deliver_digital_product(bot, order, product)
+    if not delivered:
+        return False
+
+    await _finalize_fulfillment(bot, order, send_invoice=True)
+    return True
+
+
 async def fulfill_order(bot: Bot, order: Order, send_invoice: bool = True) -> None:
     """Dispatches on the product's type, then (unless send_invoice=False)
     issues an invoice. A physical order with no shipping info yet instead
@@ -1240,12 +1510,9 @@ async def fulfill_order(bot: Bot, order: Order, send_invoice: bool = True) -> No
     await _decrement_stock(product.id)
 
     if product.product_type == "digital":
-        parts = [f"✅ Payment confirmed for \"{product.name}\"."]
-        if product.delivery_text:
-            parts.append(product.delivery_text)
-        await bot.send_message(order.buyer_telegram_id, "\n\n".join(parts))
-        if product.delivery_file_url:
-            await bot.send_message(order.buyer_telegram_id, f"🔗 {product.delivery_file_url}")
+        delivered = await _deliver_digital_product(bot, order, product)
+        if not delivered:
+            return
 
     elif product.product_type == CONTENT_UNLOCK_TYPE:
         # À-la-carte unlock of one premium ContentItem — record permanent
@@ -1334,24 +1601,7 @@ async def fulfill_order(bot: Bot, order: Order, send_invoice: bool = True) -> No
                 f"✅ Payment confirmed. Your subscription is now active until {new_until:%Y-%m-%d}.",
             )
 
-    async with async_session_maker() as session:
-        result = await session.execute(select(Order).where(Order.id == order.id))
-        row = result.scalar_one()
-        row.status = "fulfilled"
-        row.invoice_number = row.invoice_number or _invoice_number(row)
-        await session.commit()
-        await session.refresh(row)
-        order = row
-
-    if not send_invoice:
-        return
-
-    invoice_pdf = await generate_invoice(order)
-    await bot.send_document(
-        order.buyer_telegram_id,
-        BufferedInputFile(invoice_pdf, filename=f"invoice-{order.invoice_number}.pdf"),
-        caption="🧾 Invoice",
-    )
+    await _finalize_fulfillment(bot, order, send_invoice=send_invoice)
 
 
 async def fulfill_checkout(bot: Bot, checkout: Checkout) -> None:
@@ -1454,7 +1704,15 @@ async def _fetch_logo_image(url: str) -> ImageReader | None:
         return None
 
 
-def _payment_label(method: str | None) -> str:
+def _payment_label(method: str | None, is_en: bool = False) -> str:
+    if is_en:
+        return {
+            "zarinpal": "Zarinpal",
+            "card_to_card": "Card to card",
+            "stripe": "Stripe",
+            "crypto": "Crypto",
+            "ton": "TON",
+        }.get(method or "", "-")
     return {
         "zarinpal": "زرین‌پال",
         "card_to_card": "کارت به کارت",
@@ -1476,6 +1734,7 @@ async def _render_invoice_pdf(
     tax_amount: int,
     shipping: dict | None,  # {"method","name","phone","address","postal_code"} or None
     has_physical: bool,
+    is_en: bool = False,
 ) -> bytes:
     """Shared renderer behind generate_invoice (one Order) and
     generate_checkout_invoice (several Orders combined into one PDF) — an
@@ -1558,34 +1817,36 @@ async def _render_invoice_pdf(
             pass  # a corrupt/unsupported image format must not break the invoice
 
     y = 20.0
-    title(y, settings.invoice_business_name if settings and settings.invoice_business_name else "فاکتور فروش")
+    default_title = "Sales Invoice" if is_en else "فاکتور فروش"
+    title(y, settings.invoice_business_name if settings and settings.invoice_business_name else default_title)
     y = 33.0
-    row(y, "شماره فاکتور:", invoice_number, size=11)
+    row(y, "Invoice #:" if is_en else "شماره فاکتور:", invoice_number, size=11)
     y += 7
-    row(y, "تاریخ:", date.strftime("%Y-%m-%d %H:%M"), size=11)
+    row(y, "Date:" if is_en else "تاریخ:", date.strftime("%Y-%m-%d %H:%M"), size=11)
     y += 7
-    row(y, "روش پرداخت:", payment_label, size=11)
+    row(y, "Payment method:" if is_en else "روش پرداخت:", payment_label, size=11)
     y += 7
-    row(y, "شناسه خریدار:", buyer_telegram_id, size=11)
+    row(y, "Buyer ID:" if is_en else "شناسه خریدار:", buyer_telegram_id, size=11)
     y += 9
 
     if shipping and shipping.get("address"):
-        row(y, "روش ارسال:", shipping.get("method") or "", size=10)
+        row(y, "Shipping method:" if is_en else "روش ارسال:", shipping.get("method") or "", size=10)
         y += 6
-        row(y, "گیرنده:", shipping.get("name") or "", size=10)
+        row(y, "Recipient:" if is_en else "گیرنده:", shipping.get("name") or "", size=10)
         y += 6
-        row(y, "تلفن:", shipping.get("phone") or "", size=10)
+        row(y, "Phone:" if is_en else "تلفن:", shipping.get("phone") or "", size=10)
         y += 6
         if shipping.get("postal_code"):
-            row(y, "کدپستی:", shipping.get("postal_code"), size=10)
+            row(y, "Postal code:" if is_en else "کدپستی:", shipping.get("postal_code"), size=10)
             y += 6
+        address_label = "Address:" if is_en else "آدرس:"
         for i, line in enumerate(wrapped_lines(shipping.get("address") or "", 90, 10)):
-            row(y, "آدرس:" if i == 0 else "", line, size=10)
+            row(y, address_label if i == 0 else "", line, size=10)
             y += 6
         y += 3
 
     if has_physical:
-        title(y, SHIPPING_COST_DISCLAIMER_FA, size=9)
+        title(y, SHIPPING_COST_DISCLAIMER_EN if is_en else SHIPPING_COST_DISCLAIMER_FA, size=9)
         y += 9
 
     # --- Items table (right-to-left: row# | item | qty | unit price | line total) ---
@@ -1599,11 +1860,11 @@ async def _render_invoice_pdf(
     y += 4
     c.setLineWidth(0.6)
     c.line(table_left, y_pt(y + 3), right_margin, y_pt(y + 3))
-    cell(col_row_r, y, "ردیف", size=10)
-    cell(col_desc_r, y, "شرح کالا / خدمات", size=10)
-    cell(col_qty_r, y, "تعداد", size=10)
-    cell(col_unit_r, y, "قیمت واحد", size=10)
-    cell(col_total_r, y, "جمع (تومان)", size=10)
+    cell(col_row_r, y, "#" if is_en else "ردیف", size=10)
+    cell(col_desc_r, y, "Item / Service" if is_en else "شرح کالا / خدمات", size=10)
+    cell(col_qty_r, y, "Qty" if is_en else "تعداد", size=10)
+    cell(col_unit_r, y, "Unit price" if is_en else "قیمت واحد", size=10)
+    cell(col_total_r, y, "Total ($)" if is_en else "جمع (تومان)", size=10)
     y += 6
     c.line(table_left, y_pt(y), right_margin, y_pt(y))
     y += 6
@@ -1624,12 +1885,19 @@ async def _render_invoice_pdf(
     c.line(table_left, y_pt(y), right_margin, y_pt(y))
     y += 9
 
-    row(y, "جمع جزء:", f"{subtotal:,} تومان", size=11)
+    def money(value: int) -> str:
+        return f"${value:,}" if is_en else f"{value:,} تومان"
+
+    row(y, "Subtotal:" if is_en else "جمع جزء:", money(subtotal), size=11)
     y += 7
     if tax_amount:
-        row(y, f"مالیات بر ارزش‌افزوده ({VAT_RATE_PERCENT}%):", f"{tax_amount:,} تومان", size=11)
+        vat_label = (
+            f"VAT ({VAT_RATE_PERCENT}%):" if is_en
+            else f"مالیات بر ارزش‌افزوده ({VAT_RATE_PERCENT}%):"
+        )
+        row(y, vat_label, money(tax_amount), size=11)
         y += 7
-    row(y, "مبلغ قابل پرداخت:", f"{subtotal + tax_amount:,} تومان", size=13)
+    row(y, "Total due:" if is_en else "مبلغ قابل پرداخت:", money(subtotal + tax_amount), size=13)
     y += 9
 
     # --- Footer: business address/phone/note at the very bottom of the page ---
@@ -1642,7 +1910,7 @@ async def _render_invoice_pdf(
                 title(footer_y, line, size=9)
                 footer_y += 5
         if settings.invoice_business_phone:
-            row(footer_y, "تلفن:", settings.invoice_business_phone, size=9)
+            row(footer_y, "Phone:" if is_en else "تلفن:", settings.invoice_business_phone, size=9)
             footer_y += 5
         if settings.invoice_footer_note:
             for line in wrapped_lines(settings.invoice_footer_note, 170, 9)[:3]:
@@ -1664,8 +1932,9 @@ async def _render_invoice_pdf(
             )
         except Exception:
             pass  # a corrupt/unsupported image format must not break the invoice
-    title(box_top_mm - 4, "امضا و مهر فروشگاه", size=9)
-    title(box_top_mm + (box_h / mm) + 6, f"تاریخ: {date.strftime('%Y-%m-%d')}", size=9)
+    title(box_top_mm - 4, "Signature & stamp" if is_en else "امضا و مهر فروشگاه", size=9)
+    date_word = "Date" if is_en else "تاریخ"
+    title(box_top_mm + (box_h / mm) + 6, f"{date_word}: {date.strftime('%Y-%m-%d')}", size=9)
 
     c.showPage()
     c.save()
@@ -1674,11 +1943,12 @@ async def _render_invoice_pdf(
 
 async def generate_invoice(order: Order) -> bytes:
     product = await get_product(order.product_id)
+    is_en = order.payment_method == "stripe"
     return await _render_invoice_pdf(
         bot_id=order.bot_id,
         invoice_number=order.invoice_number,
         date=order.updated_at,
-        payment_label=_payment_label(order.payment_method),
+        payment_label=_payment_label(order.payment_method, is_en),
         buyer_telegram_id=order.buyer_telegram_id,
         items=[(product.name if product else "-", 1, order.price)],
         subtotal=order.price,
@@ -1695,6 +1965,7 @@ async def generate_invoice(order: Order) -> bytes:
             else None
         ),
         has_physical=bool(product and product.product_type == "physical"),
+        is_en=is_en,
     )
 
 
@@ -1705,11 +1976,12 @@ async def generate_checkout_invoice(checkout: Checkout, orders: list[Order]) -> 
     items = [
         (product.name if product else "-", 1, o.price) for o, product in zip(orders, products)
     ]
+    is_en = checkout.payment_method == "stripe"
     return await _render_invoice_pdf(
         bot_id=checkout.bot_id,
         invoice_number=checkout.invoice_number,
         date=checkout.updated_at,
-        payment_label=_payment_label(checkout.payment_method),
+        payment_label=_payment_label(checkout.payment_method, is_en),
         buyer_telegram_id=checkout.buyer_telegram_id,
         items=items,
         subtotal=checkout.total_price,
@@ -1726,6 +1998,7 @@ async def generate_checkout_invoice(checkout: Checkout, orders: list[Order]) -> 
             else None
         ),
         has_physical=any(p is not None and p.product_type == "physical" for p in products),
+        is_en=is_en,
     )
 
 

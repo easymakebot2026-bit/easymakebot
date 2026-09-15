@@ -1,8 +1,10 @@
+import io
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from openpyxl import load_workbook
 from sqlalchemy import select
 
 from bot import commerce_mode, help_text, inventory, premium_content, shop, shop_import
@@ -20,11 +22,13 @@ from bot.keyboards import (
     SHOP_UPLOAD_BUTTON_TEXTS,
     SKIP_BUTTON_TEXTS,
     commerce_mode_keyboard,
+    delivery_mode_button_to_key,
     invoice_period_label,
     product_type_button_to_key,
     shop_campaign_confirm_keyboard,
     shop_campaign_direction_from_text,
     shop_campaign_keyboard,
+    shop_delivery_mode_keyboard,
     shop_import_keyboard,
     shop_input_cancel_keyboard,
     shop_invoice_button_texts_all,
@@ -76,6 +80,7 @@ def _core_field_prompt(field: dict, is_fa: bool) -> str:
 
 
 PRODUCT_TYPE_BUTTON_TO_KEY = product_type_button_to_key()
+DELIVERY_MODE_BUTTON_TO_KEY = delivery_mode_button_to_key()
 
 # Static (settings-independent) frozensets covering every state (✅-set /
 # not-yet-set) and both languages a payment/invoice button could ever show —
@@ -126,10 +131,14 @@ async def _send_core_step(message: Message, state: FSMContext, index: int, is_fa
 
 async def _send_type_step(message: Message, state: FSMContext, index: int, is_fa: bool) -> None:
     data = await state.get_data()
-    fields = TYPE_FIELDS.get(data.get("product_type"), [])
+    product_type = data.get("product_type")
+    fields = TYPE_FIELDS.get(product_type, [])
 
     if index >= len(fields):
-        await _save_product(message, state, is_fa)
+        if product_type == "digital":
+            await _send_delivery_mode_step(message, is_fa)
+        else:
+            await _save_product(message, state, is_fa)
         return
 
     await state.update_data(wizard_index=index, wizard_phase="type")
@@ -143,6 +152,7 @@ async def _save_product(message: Message, state: FSMContext, is_fa: bool) -> Non
     payload = data.get("wizard_payload", {})
     bot_id = data.get("active_bot_id")
     product_type = data.get("product_type", "digital")
+    delivery_mode = data.get("delivery_mode", "static") if product_type == "digital" else "static"
 
     try:
         price = int(payload.get("price") or 0)
@@ -157,26 +167,301 @@ async def _save_product(message: Message, state: FSMContext, is_fa: bool) -> Non
             subscription_days = None
 
     async with async_session_maker() as session:
-        session.add(
-            Product(
-                bot_id=bot_id,
-                name=payload.get("name") or "",
-                description=payload.get("description") or "",
-                price=price,
-                image_url=payload.get("image_url"),
-                product_type=product_type,
-                delivery_text=payload.get("delivery_text"),
-                delivery_file_url=payload.get("delivery_file_url"),
-                access_level_name=payload.get("access_level_name"),
-                subscription_days=subscription_days,
-            )
+        product = Product(
+            bot_id=bot_id,
+            name=payload.get("name") or "",
+            description=payload.get("description") or "",
+            price=price,
+            image_url=payload.get("image_url"),
+            product_type=product_type,
+            delivery_text=payload.get("delivery_text"),
+            delivery_file_url=payload.get("delivery_file_url"),
+            access_level_name=payload.get("access_level_name"),
+            subscription_days=subscription_days,
+            delivery_mode=delivery_mode,
+            delivery_api_url=data.get("delivery_api_url"),
+            delivery_api_headers=data.get("delivery_api_headers"),
+            delivery_api_body_template=data.get("delivery_api_body_template"),
+            delivery_api_response_path=data.get("delivery_api_response_path"),
+            delivery_api_extra_vars=data.get("delivery_api_extra_vars"),
         )
+        session.add(product)
         await session.commit()
+        await session.refresh(product)
+        new_product_id = product.id
+
+    pending_pool_items = data.get("pending_pool_items")
+    if delivery_mode == "pool" and pending_pool_items:
+        await shop.add_pool_items(new_product_id, pending_pool_items)
 
     await state.set_state(None)
     text = "محصول اضافه شد ✅" if is_fa else "Product added ✅"
     await message.answer(text)
     await _send_menu(message, bot_id, is_fa)
+
+
+async def _send_delivery_mode_step(message: Message, is_fa: bool) -> None:
+    text = (
+        "این محصول دیجیتال چطور تحویل داده بشه؟"
+        if is_fa
+        else "How should this digital product be delivered?"
+    )
+    await message.answer(text, reply_markup=shop_delivery_mode_keyboard(is_fa))
+
+
+@router.message(ShopStates.add_product_wizard, F.text.in_(DELIVERY_MODE_BUTTON_TO_KEY))
+async def choose_delivery_mode(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    mode = DELIVERY_MODE_BUTTON_TO_KEY[message.text]
+    await state.update_data(delivery_mode=mode)
+
+    if mode == "static":
+        await _save_product(message, state, is_fa)
+        return
+
+    if mode == "pool":
+        await state.set_state(ShopStates.waiting_for_pool_items)
+        text = (
+            "آیتم‌های استخر رو بفرست — یکی در هر خط (کپی/پیست)، یا یه فایل متنی/اکسل آپلود کن. "
+            "هر آیتم فقط یه‌بار، به یه خریدار داده می‌شه. می‌تونی الان رد کنی و بعداً از صفحه‌ی "
+            "محصول اضافه کنی."
+            if is_fa
+            else "Send the pool items — one per line (paste text), or upload a text/Excel file. "
+            "Each item is handed to exactly one buyer, once. You can skip this now and add "
+            "items later from the product's page."
+        )
+        await message.answer(text, reply_markup=shop_skip_keyboard(is_fa))
+        return
+
+    # mode == "api"
+    await state.set_state(ShopStates.waiting_for_api_url)
+    text = (
+        "آدرس API که موقع تحویل صدا زده بشه رو وارد کن (باید با http:// یا https:// شروع بشه)."
+        if is_fa
+        else "Enter the API URL to call at delivery time (must start with http:// or https://)."
+    )
+    await message.answer(text, reply_markup=shop_input_cancel_keyboard(is_fa))
+
+
+@router.callback_query(F.data.startswith("shop:add_pool:"))
+async def add_pool_items_start(callback: CallbackQuery, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(callback.from_user)
+    product_id = int(callback.data.split(":")[-1])
+    await state.update_data(pool_target_product_id=product_id)
+    await state.set_state(ShopStates.waiting_for_pool_items)
+    text = (
+        "آیتم‌های جدید رو بفرست — یکی در هر خط (کپی/پیست)، یا یه فایل متنی/اکسل آپلود کن."
+        if is_fa
+        else "Send the new items — one per line (paste text), or upload a text/Excel file."
+    )
+    await callback.message.answer(text, reply_markup=shop_input_cancel_keyboard(is_fa))
+    await callback.answer()
+
+
+@router.message(ShopStates.waiting_for_pool_items, F.text.in_(SKIP_BUTTON_TEXTS))
+async def skip_pool_items(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    data = await state.get_data()
+    if data.get("pool_target_product_id") is not None:
+        await state.set_state(None)
+        await _send_menu(message, data.get("active_bot_id"), is_fa)
+        return
+    await _save_product(message, state, is_fa)
+
+
+@router.message(ShopStates.waiting_for_pool_items, F.document)
+async def receive_pool_items_file(message: Message, state: FSMContext, bot: Bot) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    file = await bot.download(message.document)
+    try:
+        items = _parse_pool_items_file(file.read(), filename=message.document.file_name)
+    except ValueError as exc:
+        retry = "دوباره امتحان کن، یا رد کن." if is_fa else "Try again, or skip."
+        await message.answer(f"{exc}\n\n{retry}", reply_markup=shop_skip_keyboard(is_fa))
+        return
+    await _apply_pool_items(message, state, is_fa, items)
+
+
+@router.message(ShopStates.waiting_for_pool_items, F.text)
+async def receive_pool_items_text(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    items = (message.text or "").splitlines()
+    await _apply_pool_items(message, state, is_fa, items)
+
+
+async def _apply_pool_items(message: Message, state: FSMContext, is_fa: bool, items: list[str]) -> None:
+    cleaned = [item.strip() for item in items if item and item.strip()]
+    data = await state.get_data()
+    target_product_id = data.get("pool_target_product_id")
+
+    if target_product_id is not None:
+        added = await shop.add_pool_items(target_product_id, cleaned)
+        await state.set_state(None)
+        text = (
+            f"{added} آیتم به استخر اضافه شد ✅" if is_fa else f"{added} item(s) added to the pool ✅"
+        )
+        await message.answer(text)
+        await _send_menu(message, data.get("active_bot_id"), is_fa)
+        return
+
+    pending = data.get("pending_pool_items", [])
+    pending.extend(cleaned)
+    await state.update_data(pending_pool_items=pending)
+    text = (
+        f"{len(pending)} آیتم آماده‌ست. می‌تونی بازم بفرستی، یا رد کن تا محصول ذخیره بشه."
+        if is_fa
+        else f"{len(pending)} item(s) ready. Send more, or skip to save the product."
+    )
+    await message.answer(text, reply_markup=shop_skip_keyboard(is_fa))
+
+
+def _parse_pool_items_file(data: bytes, filename: str | None) -> list[str]:
+    """One payload string per pool item — from a plain text/CSV file (one
+    per line) or an .xlsx workbook (first non-empty cell of each row)."""
+    name = (filename or "").lower()
+    if name.endswith(".xlsx"):
+        try:
+            workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        except Exception as exc:
+            raise ValueError("Couldn't read that Excel file. Make sure it's a valid .xlsx.") from exc
+        sheet = workbook.active
+        items = []
+        for row in sheet.iter_rows(values_only=True):
+            for cell in row:
+                if cell is not None and str(cell).strip():
+                    items.append(str(cell).strip())
+                    break
+        return items
+
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Couldn't read that file as text or as an .xlsx workbook.") from exc
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+@router.message(ShopStates.waiting_for_api_url)
+async def receive_api_url(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    url = (message.text or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        err = (
+            "آدرس باید با http:// یا https:// شروع بشه. دوباره امتحان کن."
+            if is_fa
+            else "The URL must start with http:// or https://. Try again."
+        )
+        await message.answer(err, reply_markup=shop_input_cancel_keyboard(is_fa))
+        return
+    await state.update_data(delivery_api_url=url)
+    await state.set_state(ShopStates.waiting_for_api_headers)
+    text = (
+        "هدرهای HTTP رو وارد کن (اختیاری) — هر کدوم تو یه خط، به شکل `Key: Value`. اگه لازم نیست رد کن."
+        if is_fa
+        else "Enter any HTTP headers (optional) — one per line, as `Key: Value`. Skip if not needed."
+    )
+    await message.answer(text, reply_markup=shop_skip_keyboard(is_fa))
+
+
+@router.message(ShopStates.waiting_for_api_headers, F.text.in_(SKIP_BUTTON_TEXTS))
+async def skip_api_headers(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    await state.set_state(ShopStates.waiting_for_api_body_template)
+    await _prompt_api_body(message, is_fa)
+
+
+@router.message(ShopStates.waiting_for_api_headers)
+async def receive_api_headers(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    headers = _parse_key_value_lines(message.text or "")
+    await state.update_data(delivery_api_headers=headers)
+    await state.set_state(ShopStates.waiting_for_api_body_template)
+    await _prompt_api_body(message, is_fa)
+
+
+async def _prompt_api_body(message: Message, is_fa: bool) -> None:
+    text = (
+        "قالب بدنه‌ی درخواست رو وارد کن. از {{...}} برای متغیرها استفاده کن — مثلاً order_id، "
+        "buyer_telegram_id، product_name، product_description، price، یا هر متغیر سفارشی که "
+        "بعداً تعریف می‌کنی."
+        if is_fa
+        else "Enter the request body template. Use {{...}} for variables — e.g. order_id, "
+        "buyer_telegram_id, product_name, product_description, price, or any custom variable "
+        "you define next."
+    )
+    await message.answer(text, reply_markup=shop_input_cancel_keyboard(is_fa))
+
+
+@router.message(ShopStates.waiting_for_api_body_template)
+async def receive_api_body_template(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    text = (message.text or "").strip()
+    if not text:
+        err = "این فیلد نمی‌تونه خالی باشه." if is_fa else "This field can't be empty."
+        await message.answer(err, reply_markup=shop_input_cancel_keyboard(is_fa))
+        return
+    await state.update_data(delivery_api_body_template=text)
+    await state.set_state(ShopStates.waiting_for_api_response_path)
+    prompt = (
+        "پاسخ API معمولاً JSON هست. مسیر فیلدی که باید ارسال بشه رو وارد کن (مثلاً data.config_url)، "
+        "یا رد کن تا کل پاسخ خام ارسال بشه."
+        if is_fa
+        else "The API's response is usually JSON. Enter the path to the field that should be "
+        "delivered (e.g. data.config_url), or skip to send the raw response as-is."
+    )
+    await message.answer(prompt, reply_markup=shop_skip_keyboard(is_fa))
+
+
+@router.message(ShopStates.waiting_for_api_response_path, F.text.in_(SKIP_BUTTON_TEXTS))
+async def skip_api_response_path(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    await state.set_state(ShopStates.waiting_for_api_extra_vars)
+    await _prompt_api_extra_vars(message, is_fa)
+
+
+@router.message(ShopStates.waiting_for_api_response_path)
+async def receive_api_response_path(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    await state.update_data(delivery_api_response_path=(message.text or "").strip())
+    await state.set_state(ShopStates.waiting_for_api_extra_vars)
+    await _prompt_api_extra_vars(message, is_fa)
+
+
+async def _prompt_api_extra_vars(message: Message, is_fa: bool) -> None:
+    text = (
+        "متغیرهای سفارشی این محصول رو وارد کن (اختیاری) — هر کدوم تو یه خط، به شکل `key: value` "
+        "(مثلاً duration_days: 30). این‌ها هم تو قالب بدنه قابل استفاده‌ن. اگه لازم نیست رد کن."
+        if is_fa
+        else "Enter this product's custom variables (optional) — one per line, as `key: value` "
+        "(e.g. duration_days: 30). These are also usable in the body template. Skip if not needed."
+    )
+    await message.answer(text, reply_markup=shop_skip_keyboard(is_fa))
+
+
+@router.message(ShopStates.waiting_for_api_extra_vars, F.text.in_(SKIP_BUTTON_TEXTS))
+async def skip_api_extra_vars(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    await _save_product(message, state, is_fa)
+
+
+@router.message(ShopStates.waiting_for_api_extra_vars)
+async def receive_api_extra_vars(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    extra_vars = _parse_key_value_lines(message.text or "")
+    await state.update_data(delivery_api_extra_vars=extra_vars)
+    await _save_product(message, state, is_fa)
+
+
+def _parse_key_value_lines(text: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        value = value.strip()
+        if key:
+            result[key] = value
+    return result
 
 
 @router.message(F.text.in_(tool_button_texts("shop")))
@@ -320,8 +605,21 @@ async def select_product(callback: CallbackQuery, state: FSMContext) -> None:
         if product.product_type == "access" and product.access_level_name:
             lines.append(f"Access level: {product.access_level_name}")
 
+    show_pool_button = False
+    if product.product_type == "digital" and product.delivery_mode == "pool":
+        show_pool_button = True
+        counts = await shop.pool_counts(product.id)
+        lines.append(
+            f"استخر آیتم: {counts['available']} موجود، {counts['assigned']} تحویل‌شده"
+            if is_fa
+            else f"Item pool: {counts['available']} available, {counts['assigned']} delivered"
+        )
+    elif product.product_type == "digital" and product.delivery_mode == "api":
+        lines.append("تحویل: تماس زنده با API" if is_fa else "Delivery: live API call")
+
     await callback.message.answer(
-        "\n".join(lines), reply_markup=shop_product_detail_keyboard(product.id, is_fa)
+        "\n".join(lines),
+        reply_markup=shop_product_detail_keyboard(product.id, is_fa, show_pool_button=show_pool_button),
     )
     await callback.answer()
 

@@ -33,6 +33,14 @@ _is_platform_admin = IsPlatformAdmin(_config.platform_admin_id)
 
 PAGE_SIZE = 20
 
+_ORDER_METHOD_LABELS = {
+    "zarinpal": "Zarinpal (Toman)",
+    "stripe": "Stripe ($)",
+    "card_to_card": "Card to Card",
+    "crypto": "Crypto",
+    "ton": "TON",
+}
+
 
 def _bot_status_line(built_bot) -> str:
     if live.is_bot_suspended(built_bot):
@@ -63,8 +71,13 @@ async def _send_bot_detail(message: Message, bot_id: str) -> bool:
         f"Status: {_bot_status_line(built_bot)}",
         f"Subscribers: {detail['subscriber_count']}",
         f"Paid orders: {detail['paid_order_count']} — revenue: {detail['revenue_toman']:,} Toman",
-        f"Created: {built_bot.created_at:%Y-%m-%d}",
     ]
+    if detail["orders_by_method"]:
+        lines.append("By payment method:")
+        for method, info in detail["orders_by_method"].items():
+            label = _ORDER_METHOD_LABELS.get(method, method)
+            lines.append(f"  • {label}: {info['count']} orders — {info['revenue']:,} Toman")
+    lines.append(f"Created: {built_bot.created_at:%Y-%m-%d}")
     await message.answer("\n".join(lines), reply_markup=admin_bot_detail_keyboard(built_bot))
     return True
 
@@ -95,9 +108,20 @@ async def show_stats(callback: CallbackQuery) -> None:
         f"Bots: {stats['bot_count']} (live: {stats['bots_live']}, expired: {stats['bots_expired']}, "
         f"never activated: {stats['bots_never_activated']}, suspended: {stats['bots_suspended']})",
         f"Subscribers (all bots): {stats['subscriber_count']}",
+        "",
+        "💰 easymakebot revenue (yours — /live plan payments):",
+        f"  Rial (Zarinpal): {stats['platform_revenue_toman']:,} Toman "
+        f"({stats['platform_paid_count_toman']} payments)",
+        f"  Foreign currency (Stripe): ${stats['platform_revenue_usd']:,} "
+        f"({stats['platform_paid_count_usd']} payments)",
+        f"  Crypto (TON): ${stats['platform_revenue_ton_usd']:,} "
+        f"({stats['platform_paid_count_ton']} payments)",
+        f"  Total paid: {stats['platform_paid_count']} payments",
+        "",
+        "📦 Across all built bots' own storefronts (NOT your revenue):",
         f"Products: {stats['product_count']}",
-        f"Orders: {stats['order_count']} ({stats['paid_order_count']} paid)",
-        f"Revenue: {stats['revenue_toman']:,} Toman",
+        f"Orders: {stats['order_count']} ({stats['paid_order_count']} paid) — "
+        f"{stats['revenue_toman']:,} Toman total",
         "",
         "📰 Recent activity:",
     ]
@@ -118,6 +142,18 @@ async def export_report(callback: CallbackQuery, bot: Bot) -> None:
     data = await admin_panel.generate_report_excel()
     file = BufferedInputFile(data, filename="easymakebot_platform_report.xlsx")
     await callback.message.answer_document(file, caption="📊 Full platform report")
+
+
+@router.callback_query(F.data.startswith("admin:export_bot:"), _is_platform_admin)
+async def export_bot_report(callback: CallbackQuery) -> None:
+    bot_id = callback.data.split(":")[-1]
+    await callback.answer("Generating…")
+    data = await admin_panel.generate_bot_report_excel(bot_id)
+    if data is None:
+        await callback.message.answer("Bot not found.")
+        return
+    file = BufferedInputFile(data, filename=f"bot_report_{bot_id}.xlsx")
+    await callback.message.answer_document(file, caption="📊 Bot report")
 
 
 # --- Users ---------------------------------------------------------------

@@ -1024,6 +1024,14 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             except Exception:
                 logger.warning("Failed to notify buyer about rejected order %s", order_id)
 
+    @dp.callback_query(F.data.startswith("retry_delivery:"), F.from_user.id == owner_telegram_id)
+    async def handle_retry_delivery(callback: CallbackQuery) -> None:
+        order_id = int(callback.data.split(":")[-1])
+        await callback.answer("Retrying…")
+        delivered = await shop.retry_delivery(bot, order_id)
+        if delivered:
+            await callback.message.edit_reply_markup(reply_markup=None)
+
     @dp.callback_query(F.data.startswith("ship_info:"))
     async def start_shipping_wizard(callback: CallbackQuery, state: FSMContext) -> None:
         order_id = int(callback.data.split(":")[-1])
