@@ -48,6 +48,7 @@ from bot.keyboards import (
 )
 from bot.shop import TYPE_FIELDS, type_field_prompt
 from bot.states import ShopStates
+from bot.url_safety import check_url_is_safe
 
 router = Router(name="shop")
 
@@ -349,6 +350,15 @@ async def receive_api_url(message: Message, state: FSMContext) -> None:
             "آدرس باید با http:// یا https:// شروع بشه. دوباره امتحان کن."
             if is_fa
             else "The URL must start with http:// or https://. Try again."
+        )
+        await message.answer(err, reply_markup=shop_input_cancel_keyboard(is_fa))
+        return
+    unsafe_reason = await check_url_is_safe(url)
+    if unsafe_reason is not None:
+        err = (
+            "این آدرس قابل قبول نیست (به یه آدرس داخلی/خصوصی اشاره می‌کنه). یه آدرس عمومی وارد کن."
+            if is_fa
+            else "That URL isn't allowed (it points at a private/internal address). Enter a public URL."
         )
         await message.answer(err, reply_markup=shop_input_cancel_keyboard(is_fa))
         return

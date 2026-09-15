@@ -8,6 +8,7 @@ HTTP redirect callback), same split as bot/content_nav.py / bot/flow_engine.py.
 """
 
 import io
+import json
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -42,6 +43,7 @@ from bot.db.models import (
     ShopSettings,
     User,
 )
+from bot.url_safety import check_url_is_safe
 from bot.session import make_session
 
 CONTENT_UNLOCK_TYPE = "content_unlock"
@@ -127,6 +129,11 @@ SHIPPING_COST_DISCLAIMER_FA = "هزینه ارسال به عهده خریدار 
 SHIPPING_COST_DISCLAIMER_EN = "Shipping cost is the buyer's responsibility."
 
 VAT_RATE_PERCENT = 10
+
+# Caps on server-side fetches of owner-supplied URLs (invoice logo/signature,
+# "live API call" delivery) — see bot/url_safety.py for the SSRF guard itself.
+_MAX_LOGO_BYTES = 5_000_000  # generous for a logo/signature image
+_MAX_API_RESPONSE_BYTES = 1_000_000  # generous for a code/link/JSON reply
 
 _FONT_NAME = "Vazirmatn"
 _FONT_PATH = Path(__file__).resolve().parent / "assets" / "Vazirmatn-Regular.ttf"
@@ -1344,20 +1351,37 @@ async def _deliver_via_api(order: Order, product: Product) -> tuple[bool, str | 
     headers = product.delivery_api_headers or {}
     body = _render_template(product.delivery_api_body_template or "", variables)
 
+    url = product.delivery_api_url or ""
+    unsafe_reason = await check_url_is_safe(url)
+    if unsafe_reason is not None:
+        logger.warning(
+            "Blocked delivery API call for order %s: %s (%s)", order.id, unsafe_reason, url
+        )
+        return False, "delivery API URL is not allowed (points at a private/internal address)"
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.request(
                 method,
-                product.delivery_api_url,
+                url,
                 headers=headers,
                 data=body or None,
                 timeout=aiohttp.ClientTimeout(total=20),
+                allow_redirects=False,  # a validated URL could still 302 to an internal one
             ) as resp:
-                text_body = await resp.text()
+                if 300 <= resp.status < 400:
+                    return False, "API returned a redirect, which is not followed for security reasons"
+                raw = await resp.content.read(_MAX_API_RESPONSE_BYTES + 1)
+                if len(raw) > _MAX_API_RESPONSE_BYTES:
+                    return False, "API response was too large"
                 if resp.status < 200 or resp.status >= 300:
                     return False, f"API returned status {resp.status}"
                 try:
-                    data = await resp.json(content_type=None)
+                    text_body = raw.decode(resp.get_encoding(), errors="replace")
+                except Exception:
+                    text_body = raw.decode("utf-8", errors="replace")
+                try:
+                    data = json.loads(text_body)
                 except Exception:
                     data = None
     except Exception as exc:
@@ -1694,11 +1718,15 @@ async def _fetch_logo_image(url: str) -> ImageReader | None:
     URL must never fail invoice generation, so any error here just means no
     logo gets drawn (same graceful-omit philosophy as everywhere else)."""
     try:
+        if await check_url_is_safe(url) is not None:
+            return None
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8)) as session:
-            async with session.get(url) as resp:
+            async with session.get(url, allow_redirects=False) as resp:
                 if resp.status != 200:
                     return None
-                data = await resp.read()
+                data = await resp.content.read(_MAX_LOGO_BYTES + 1)
+                if len(data) > _MAX_LOGO_BYTES:
+                    return None
         return ImageReader(io.BytesIO(data))
     except Exception:
         return None
