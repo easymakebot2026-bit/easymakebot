@@ -7,4 +7,5 @@ export const NodeActionsContext = createContext({
   updateNodeData: () => {},
   deleteNode: () => {},
   openContentManager: () => {},
+  openMessageComposer: () => {},
 })

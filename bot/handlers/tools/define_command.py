@@ -1,13 +1,13 @@
 import re
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import BufferedInputFile, CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup
 from sqlalchemy import select
 
 from bot import help_text
 from bot.db.base import async_session_maker
-from bot.db.models import Command
+from bot.db.models import BuiltBot, Command
 from bot.guide import owner_prefers_persian
 from bot.keyboards import (
     COMMAND_VISIBILITY_BUTTON_TO_KEY,
@@ -23,7 +23,9 @@ from bot.keyboards import (
     tool_button_texts,
     tools_reply_keyboard,
 )
+from bot.message_buttons import validate_buttons
 from bot.runtime import sync_bot_commands
+from bot.session import make_session
 from bot.states import DefineCommandStates
 
 router = Router(name="define_command")
@@ -265,25 +267,359 @@ async def receive_command_action(message: Message, state: FSMContext) -> None:
         return
 
     if action == "message":
-        await state.set_state(DefineCommandStates.waiting_for_command_message_text)
-        text = "متنی که این دستور باید بفرسته رو بنویس." if is_fa else "Write the text this command should send."
-        await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+        await state.update_data(message_blocks=[], current_block={})
+        await _start_message_block(message, state, is_fa)
         return
 
     await _save_command(message, state, is_fa, action, {})
+
+
+# --- "message" action sub-wizard ------------------------------------------
+#
+# Builds one message block at a time (optional photo/video/document,
+# text/caption, optional buttons), looping on "add another message?" before
+# the accumulated messages[] list is saved via _save_command. See
+# bot/flow_engine.py:_execute_node ("send_message"/"message" branch) for how
+# this shape is interpreted, and bot/message_buttons.py for button rules.
+
+def _attachment_photo_text(is_fa: bool = False) -> str:
+    return "📷 عکس" if is_fa else "📷 Photo"
+
+
+def _attachment_video_text(is_fa: bool = False) -> str:
+    return "🎥 ویدیو" if is_fa else "🎥 Video"
+
+
+def _attachment_document_text(is_fa: bool = False) -> str:
+    return "📄 فایل" if is_fa else "📄 Document"
+
+
+def _attachment_skip_text(is_fa: bool = False) -> str:
+    return "⏭ بدون پیوست" if is_fa else "⏭ No attachment"
+
+
+def _attachment_choice_map() -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for fa, en, key in (
+        (_attachment_photo_text(True), _attachment_photo_text(False), "photo"),
+        (_attachment_video_text(True), _attachment_video_text(False), "video"),
+        (_attachment_document_text(True), _attachment_document_text(False), "document"),
+        (_attachment_skip_text(True), _attachment_skip_text(False), "skip"),
+    ):
+        mapping[fa] = key
+        mapping[en] = key
+    return mapping
+
+
+def _attachment_choice_keyboard(is_fa: bool = False) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=_attachment_photo_text(is_fa)), KeyboardButton(text=_attachment_video_text(is_fa))],
+            [KeyboardButton(text=_attachment_document_text(is_fa)), KeyboardButton(text=_attachment_skip_text(is_fa))],
+            [KeyboardButton(text=cancel_button_text(is_fa))],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def _button_url_text(is_fa: bool = False) -> str:
+    return "🔗 دکمه لینک" if is_fa else "🔗 Link button"
+
+
+def _button_jump_text(is_fa: bool = False) -> str:
+    return "↪️ دکمه دستور دیگر" if is_fa else "↪️ Jump-to-command button"
+
+
+def _button_done_text(is_fa: bool = False) -> str:
+    return "✅ تمام، ادامه بده" if is_fa else "✅ Done, continue"
+
+
+def _button_choice_map() -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for fa, en, key in (
+        (_button_url_text(True), _button_url_text(False), "url"),
+        (_button_jump_text(True), _button_jump_text(False), "jump"),
+        (_button_done_text(True), _button_done_text(False), "done"),
+    ):
+        mapping[fa] = key
+        mapping[en] = key
+    return mapping
+
+
+def _button_choice_keyboard(is_fa: bool = False) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=_button_url_text(is_fa))],
+            [KeyboardButton(text=_button_jump_text(is_fa))],
+            [KeyboardButton(text=_button_done_text(is_fa))],
+            [KeyboardButton(text=cancel_button_text(is_fa))],
+        ],
+        resize_keyboard=True,
+    )
+
+
+def _more_messages_yes_text(is_fa: bool = False) -> str:
+    return "➕ بله، یه پیام دیگه هم اضافه کن" if is_fa else "➕ Yes, add another message"
+
+
+def _more_messages_no_text(is_fa: bool = False) -> str:
+    return "✅ نه، تمومه" if is_fa else "✅ No, that's it"
+
+
+def _more_messages_map() -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for fa, en, key in (
+        (_more_messages_yes_text(True), _more_messages_yes_text(False), "yes"),
+        (_more_messages_no_text(True), _more_messages_no_text(False), "no"),
+    ):
+        mapping[fa] = key
+        mapping[en] = key
+    return mapping
+
+
+def _more_messages_keyboard(is_fa: bool = False) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=_more_messages_yes_text(is_fa))],
+            [KeyboardButton(text=_more_messages_no_text(is_fa))],
+            [KeyboardButton(text=cancel_button_text(is_fa))],
+        ],
+        resize_keyboard=True,
+    )
+
+
+async def _start_message_block(message: Message, state: FSMContext, is_fa: bool) -> None:
+    await state.set_state(DefineCommandStates.waiting_for_message_attachment_choice)
+    text = "این پیام عکس/ویدیو/فایل هم داشته باشه؟" if is_fa else "Should this message include a photo/video/file?"
+    await message.answer(text, reply_markup=_attachment_choice_keyboard(is_fa))
+
+
+@router.message(DefineCommandStates.waiting_for_message_attachment_choice)
+async def receive_message_attachment_choice(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    choice = _attachment_choice_map().get((message.text or "").strip())
+
+    if choice is None:
+        text = "لطفاً یکی از گزینه‌های زیر رو انتخاب کن." if is_fa else "Please choose one of the options below."
+        await message.answer(text, reply_markup=_attachment_choice_keyboard(is_fa))
+        return
+
+    if choice == "skip":
+        await state.set_state(DefineCommandStates.waiting_for_command_message_text)
+        text = "متنی که این پیام باید داشته باشه رو بنویس." if is_fa else "Write the text this message should contain."
+        await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+        return
+
+    await state.update_data(pending_attachment_type=choice)
+    await state.set_state(DefineCommandStates.waiting_for_message_attachment_file)
+    prompts_fa = {"photo": "عکس مورد نظر رو بفرست.", "video": "ویدیوی مورد نظر رو بفرست.", "document": "فایل مورد نظر رو بفرست."}
+    prompts_en = {"photo": "Send the photo.", "video": "Send the video.", "document": "Send the document."}
+    text = prompts_fa[choice] if is_fa else prompts_en[choice]
+    await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+
+
+@router.message(DefineCommandStates.waiting_for_message_attachment_file)
+async def receive_message_attachment_file(message: Message, state: FSMContext, bot: Bot) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    data = await state.get_data()
+    expected_type = data.get("pending_attachment_type")
+    bot_id = data.get("active_bot_id")
+
+    if expected_type == "photo" and message.photo:
+        file_id = message.photo[-1].file_id
+    elif expected_type == "video" and message.video:
+        file_id = message.video.file_id
+    elif expected_type == "document" and message.document:
+        file_id = message.document.file_id
+    else:
+        text = "این نوع فایلی که خواستم نیست. دوباره امتحان کن." if is_fa else "That's not the file type I asked for. Please try again."
+        await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+        return
+
+    async with async_session_maker() as session:
+        result = await session.execute(select(BuiltBot).where(BuiltBot.id == bot_id))
+        built_bot = result.scalar_one_or_none()
+    if built_bot is None:
+        text = "این ربات دیگه وجود نداره." if is_fa else "This bot no longer exists."
+        await message.answer(text)
+        await state.set_state(None)
+        return
+
+    # A file_id from THIS (builder) bot's chat is only valid on this bot's
+    # own token — download its bytes here and re-upload once through the
+    # owner's OWN built bot (sent back to the owner themselves) to mint a
+    # file_id that bot can actually use later. Same technique as
+    # bot/handlers/tools/content_list.py's "Add Post" flow.
+    tg_file = await bot.get_file(file_id)
+    file_bytes = await bot.download_file(tg_file.file_path)
+    ext = {"photo": "jpg", "video": "mp4", "document": "bin"}[expected_type]
+    input_file = BufferedInputFile(file_bytes.read(), filename=f"command_attachment.{ext}")
+
+    temp_bot = Bot(token=built_bot.token, session=make_session())
+    try:
+        if expected_type == "photo":
+            sent = await temp_bot.send_photo(message.from_user.id, photo=input_file)
+            minted_file_id = sent.photo[-1].file_id
+        elif expected_type == "video":
+            sent = await temp_bot.send_video(message.from_user.id, video=input_file)
+            minted_file_id = sent.video.file_id
+        else:
+            sent = await temp_bot.send_document(message.from_user.id, document=input_file)
+            minted_file_id = sent.document.file_id
+    except Exception:
+        text = (
+            "نتونستم این فایل رو برای رباتت آماده کنم — شاید هنوز یه بار با رباتت چت نکرده باشی. "
+            "اول /start رباتت رو بزن، بعد دوباره امتحان کن."
+            if is_fa
+            else "Couldn't prepare this file for your bot — you may not have chatted "
+            "with it yet. Send /start to your bot once, then try again."
+        )
+        await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+        return
+    finally:
+        await temp_bot.session.close()
+
+    current_block = dict(data.get("current_block") or {})
+    current_block["media_type"] = expected_type
+    current_block["media_file_id"] = minted_file_id
+    await state.update_data(current_block=current_block)
+
+    caption_from_upload = (message.caption or "").strip()
+    if caption_from_upload:
+        current_block["text"] = caption_from_upload
+        await state.update_data(current_block=current_block)
+        await _ask_for_buttons(message, state, is_fa)
+        return
+
+    await state.set_state(DefineCommandStates.waiting_for_command_message_text)
+    text = (
+        "حالا کپشن این پیام رو بنویس (اگه نمی‌خوای متنی داشته باشه، یه فاصله بفرست)."
+        if is_fa
+        else "Now write this message's caption (send a single space if you don't want any text)."
+    )
+    await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
 
 
 @router.message(DefineCommandStates.waiting_for_command_message_text)
 async def receive_command_message_text(message: Message, state: FSMContext) -> None:
     is_fa = await owner_prefers_persian(message.from_user)
     text_in = (message.text or "").strip()
+    data = await state.get_data()
+    current_block = dict(data.get("current_block") or {})
 
-    if not text_in:
+    if not text_in and not current_block.get("media_type"):
         text = "این فیلد نمی‌تونه خالی باشه. دوباره امتحان کن." if is_fa else "This field can't be empty. Please try again."
         await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
         return
 
-    await _save_command(message, state, is_fa, "message", {"text": text_in})
+    current_block["text"] = text_in
+    await state.update_data(current_block=current_block)
+    await _ask_for_buttons(message, state, is_fa)
+
+
+async def _ask_for_buttons(message: Message, state: FSMContext, is_fa: bool) -> None:
+    await state.set_state(DefineCommandStates.waiting_for_message_button_choice)
+    text = "می‌خوای زیر این پیام دکمه هم باشه؟" if is_fa else "Want to add any buttons under this message?"
+    await message.answer(text, reply_markup=_button_choice_keyboard(is_fa))
+
+
+@router.message(DefineCommandStates.waiting_for_message_button_choice)
+async def receive_button_choice(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    choice = _button_choice_map().get((message.text or "").strip())
+
+    if choice is None:
+        text = "لطفاً یکی از گزینه‌های زیر رو انتخاب کن." if is_fa else "Please choose one of the options below."
+        await message.answer(text, reply_markup=_button_choice_keyboard(is_fa))
+        return
+
+    if choice == "done":
+        await _ask_more_messages(message, state, is_fa)
+        return
+
+    await state.update_data(pending_button_type=choice)
+    await state.set_state(DefineCommandStates.waiting_for_message_button_label)
+    text = 'متن دکمه رو بنویس (مثلاً «مشاهده سایت»).' if is_fa else 'Write the button\'s label (e.g. "Visit website").'
+    await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+
+
+@router.message(DefineCommandStates.waiting_for_message_button_label)
+async def receive_button_label(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    label = (message.text or "").strip()
+
+    if not label:
+        text = "متن دکمه نمی‌تونه خالی باشه." if is_fa else "Button label can't be empty."
+        await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+        return
+
+    await state.update_data(pending_button_label=label)
+    await state.set_state(DefineCommandStates.waiting_for_message_button_value)
+    data = await state.get_data()
+    if data.get("pending_button_type") == "url":
+        text = "لینک دکمه رو بفرست (باید با http:// یا https:// شروع بشه)." if is_fa else "Send the button's link (must start with http:// or https://)."
+    else:
+        text = "اسم دستور مقصد رو بفرست (باید با / شروع بشه، مثلاً /menu)." if is_fa else "Send the target command's name (must start with /, e.g. /menu)."
+    await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+
+
+@router.message(DefineCommandStates.waiting_for_message_button_value)
+async def receive_button_value(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    value = (message.text or "").strip()
+    data = await state.get_data()
+    button_type = data.get("pending_button_type")
+    label = data.get("pending_button_label")
+
+    new_button = {"type": button_type, "text": label}
+    if button_type == "url":
+        new_button["url"] = value
+    else:
+        new_button["command"] = value
+
+    current_block = dict(data.get("current_block") or {})
+    buttons = list(current_block.get("buttons") or [])
+    buttons.append(new_button)
+
+    error = validate_buttons(buttons, is_fa)
+    if error:
+        await message.answer(error, reply_markup=cancel_reply_keyboard(is_fa))
+        return
+
+    current_block["buttons"] = buttons
+    await state.update_data(current_block=current_block)
+    text = "دکمه اضافه شد ✅" if is_fa else "Button added ✅"
+    await message.answer(text)
+    await _ask_for_buttons(message, state, is_fa)
+
+
+async def _ask_more_messages(message: Message, state: FSMContext, is_fa: bool) -> None:
+    data = await state.get_data()
+    blocks = list(data.get("message_blocks") or [])
+    blocks.append(data.get("current_block") or {})
+    await state.update_data(message_blocks=blocks, current_block={})
+    await state.set_state(DefineCommandStates.waiting_for_message_more)
+    text = "می‌خوای یه پیام دیگه هم به این دستور اضافه کنی؟" if is_fa else "Want to add another message to this command?"
+    await message.answer(text, reply_markup=_more_messages_keyboard(is_fa))
+
+
+@router.message(DefineCommandStates.waiting_for_message_more)
+async def receive_more_messages_choice(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    choice = _more_messages_map().get((message.text or "").strip())
+
+    if choice is None:
+        text = "لطفاً یکی از گزینه‌های زیر رو انتخاب کن." if is_fa else "Please choose one of the options below."
+        await message.answer(text, reply_markup=_more_messages_keyboard(is_fa))
+        return
+
+    if choice == "yes":
+        await _start_message_block(message, state, is_fa)
+        return
+
+    data = await state.get_data()
+    blocks = data.get("message_blocks") or []
+    await _save_command(message, state, is_fa, "message", {"messages": blocks})
 
 
 async def _save_command(

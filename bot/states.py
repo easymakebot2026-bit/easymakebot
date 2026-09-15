@@ -14,7 +14,16 @@ class DefineCommandStates(StatesGroup):
     # bot/handlers/tools/define_command.py.
     waiting_for_command_visibility = State()
     waiting_for_command_action = State()
+    # "message" action sub-wizard — builds one message block at a time
+    # (optional attachment, text, optional buttons), looping for "add
+    # another message?" before the whole messages[] list is saved.
+    waiting_for_message_attachment_choice = State()
+    waiting_for_message_attachment_file = State()
     waiting_for_command_message_text = State()
+    waiting_for_message_button_choice = State()
+    waiting_for_message_button_label = State()
+    waiting_for_message_button_value = State()
+    waiting_for_message_more = State()
 
 
 class MessageToAllStates(StatesGroup):

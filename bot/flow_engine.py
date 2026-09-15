@@ -15,7 +15,22 @@ Graph shape (produced by webapp/):
 
 Node types:
 - trigger: entry point, matched by command (e.g. "/start"). Never executed itself.
-- send_message: sends data["text"] to the user.
+- send_message (alias "message", the chat-wizard's historical key — both are
+  accepted so pre-existing wizard-defined commands keep working unchanged):
+  sends one or more messages in order, each optionally with a photo/video/
+  document, inline buttons (an external link, or a "jump" button that fires
+  another command on this same bot — see bot/message_buttons.py), and
+  {name}/{username} personalization in its text (see _personalize below).
+  data shape: {"messages": [{"text": ..., "media_type": "photo"|"video"|
+  "document"|None, "media_file_id": ..., "media_url": ..., "buttons": [...]},
+  ...]}. media_file_id (minted per-bot by the chat wizard's upload step) and
+  media_url (a plain link, used by the Visual Builder's simpler field — sent
+  to Telegram's `photo`/`video`/`document` parameter as-is, which accepts an
+  HTTP(S) URL for Telegram's own servers to fetch, so this never makes an
+  outbound request from our own server) are interchangeable; file_id wins if
+  both happen to be set. The older shape {"text": "..."} (no "messages" key)
+  is treated as a single implicit message, so nothing saved before this
+  feature needs migrating.
 - force_join_gate: reuses bot/force_join_gate.py; if the user is missing any
   required channel, sends the join prompt and stops the walk here (returning
   from run_flow). Re-running the flow (e.g. after "I've Joined") will pass
@@ -58,6 +73,7 @@ _save_subscriber_phone_and_resume, which branches on which resume marker it
 finds.
 """
 
+import logging
 import uuid
 from typing import Any
 
@@ -73,7 +89,10 @@ from bot.db.models import BotSubscriber, Product
 from bot.force_join_gate import force_join_keyboard, missing_join_channels
 from bot.guide import end_user_prefers_persian, phone_share_keyboard, send_built_bot_guide
 from bot.keyboards import CONTENT_MENU_HEADING, content_menu_keyboard
+from bot.message_buttons import build_inline_keyboard
 from bot.states import SubscriberOnboardingStates
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_command(raw: str) -> str:
@@ -318,6 +337,58 @@ async def build_shop_list_view(
     return heading, InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def _personalize(text: str, tg_user: Any) -> str:
+    """Substitutes a small fixed allow-list of personalization placeholders
+    into owner-authored text — deliberately plain .replace() calls, never
+    str.format()/f-string evaluation, so a stray "{" or "}" the owner typed
+    (or a curly brace that just happens to appear in normal writing) can
+    never raise. {username} renders as "" (not "None") for a subscriber with
+    no Telegram username set."""
+    if not text:
+        return text
+    name = (getattr(tg_user, "first_name", None) or "").strip()
+    username = getattr(tg_user, "username", None)
+    text = text.replace("{name}", name)
+    text = text.replace("{username}", f"@{username}" if username else "")
+    return text
+
+
+async def _send_message_block(message: Message, block: dict[str, Any]) -> None:
+    """Sends one item of a send_message/message node's `messages` list —
+    text, optionally with a photo/video/document and inline buttons. Never
+    raises: a bad/expired media_file_id falls back to text-only rather than
+    losing the whole command's reply (this can happen if an owner deletes
+    the source message a file_id was minted from, or on rare Telegram-side
+    file expiry)."""
+    text = _personalize((block.get("text") or "").strip(), message.from_user)
+    media_type = block.get("media_type")
+    # file_id (chat wizard, minted per-bot at upload time) or a plain URL
+    # (Visual Builder's simpler field — passed straight to Telegram, whose
+    # own servers fetch it, so this never makes an outbound request from our
+    # server) — whichever is present; file_id wins if both are set.
+    media_source = block.get("media_file_id") or block.get("media_url")
+
+    try:
+        # Built inside the try: the Visual Builder saves button data with no
+        # validation of its own, so malformed input here (wrong types, not
+        # just missing/falsy fields) must fall back to text-only exactly
+        # like a bad media_source does, rather than raising and aborting a
+        # multi-message sequence partway through.
+        keyboard = build_inline_keyboard(block.get("buttons") or [])
+        if media_type == "photo" and media_source:
+            await message.answer_photo(media_source, caption=text or None, reply_markup=keyboard)
+        elif media_type == "video" and media_source:
+            await message.answer_video(media_source, caption=text or None, reply_markup=keyboard)
+        elif media_type == "document" and media_source:
+            await message.answer_document(media_source, caption=text or None, reply_markup=keyboard)
+        else:
+            await message.answer(text, reply_markup=keyboard)
+    except Exception:
+        logger.warning("Failed to send message block (media_type=%s); falling back to text-only", media_type)
+        if text:
+            await message.answer(text)
+
+
 async def _execute_node(
     bot: Bot,
     bot_id: uuid.UUID,
@@ -331,8 +402,14 @@ async def _execute_node(
     gate that's paused waiting on the user (force_join_gate, guide_video) —
     or False to let the caller continue to whatever comes next. See the
     module docstring for the two callers and how a pause gets resumed."""
-    if node_type == "send_message":
-        await message.answer(data.get("text") or "")
+    if node_type in ("send_message", "message"):
+        messages = data.get("messages")
+        if not messages:
+            # Older/simpler shape: a single implicit message. Covers both
+            # pre-this-feature stored data and a bare {"text": "..."} node.
+            messages = [{"text": data.get("text") or ""}]
+        for block in messages:
+            await _send_message_block(message, block)
     elif node_type == "force_join_gate":
         missing = await missing_join_channels(bot, bot_id, message.from_user.id)
         if missing:

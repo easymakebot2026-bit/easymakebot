@@ -16,6 +16,7 @@ import { nodeTypes, BLOCK_DEFS } from './nodes.jsx'
 import { NodeActionsContext } from './FlowContext.js'
 import Palette from './Palette.jsx'
 import ContentManager from './ContentManager.jsx'
+import MessageComposer from './MessageComposer.jsx'
 import { initTelegramApp, getBotId, loadFlow, saveFlow } from './telegram.js'
 
 let nextId = 1
@@ -28,6 +29,7 @@ function Canvas() {
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [status, setStatus] = useState('Loading…')
   const [managingContent, setManagingContent] = useState(false)
+  const [editingMessageNodeId, setEditingMessageNodeId] = useState(null)
   const wrapperRef = useRef(null)
   const { screenToFlowPosition } = useReactFlow()
 
@@ -65,10 +67,11 @@ function Canvas() {
   )
 
   const openContentManager = useCallback(() => setManagingContent(true), [])
+  const openMessageComposer = useCallback((id) => setEditingMessageNodeId(id), [])
 
   const nodeActions = useMemo(
-    () => ({ updateNodeData, deleteNode, openContentManager }),
-    [updateNodeData, deleteNode, openContentManager]
+    () => ({ updateNodeData, deleteNode, openContentManager, openMessageComposer }),
+    [updateNodeData, deleteNode, openContentManager, openMessageComposer]
   )
 
   const onConnect = useCallback((params) => setEdges((eds) => addEdge(params, eds)), [setEdges])
@@ -149,6 +152,23 @@ function Canvas() {
         </div>
       </div>
       {managingContent && <ContentManager onClose={() => setManagingContent(false)} />}
+      {editingMessageNodeId && (
+        <MessageComposer
+          initialMessages={(() => {
+            const node = nodes.find((n) => n.id === editingMessageNodeId)
+            // Back-compat: a node saved before messages[] existed only has a
+            // bare `text` field — show it as a single message rather than
+            // opening the composer on an empty block and silently losing it
+            // on save (same fallback SendMessageNode's preview uses).
+            return node?.data?.messages || (node?.data?.text !== undefined ? [{ text: node.data.text }] : undefined)
+          })()}
+          onClose={() => setEditingMessageNodeId(null)}
+          onSave={(messages) => {
+            updateNodeData(editingMessageNodeId, { messages })
+            setEditingMessageNodeId(null)
+          }}
+        />
+      )}
     </NodeActionsContext.Provider>
   )
 }

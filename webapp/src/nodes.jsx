@@ -7,10 +7,11 @@ import { NodeActionsContext } from './FlowContext.js'
 export const BLOCK_DEFS = [
   { type: 'guide_video', label: '📖 Guide & Video', defaultData: {} },
   { type: 'trigger', label: '▶️ Trigger', defaultData: { command: '/start' } },
-  { type: 'send_message', label: '💬 Send Message', defaultData: { text: '' } },
+  { type: 'send_message', label: '💬 Send Message', defaultData: { messages: [{ text: '' }] } },
   { type: 'force_join_gate', label: '🔒 Force Join Gate', defaultData: {} },
   { type: 'content_list', label: '📚 Content List', defaultData: {} },
   { type: 'shop', label: '🛍 Shop', defaultData: {} },
+  { type: 'order_status', label: '📦 Order Status', defaultData: {} },
   { type: 'broadcast', label: '📢 Broadcast', defaultData: {} },
 ]
 
@@ -50,15 +51,24 @@ export function TriggerNode({ id, data }) {
 }
 
 export function SendMessageNode({ id, data }) {
-  const { updateNodeData } = useContext(NodeActionsContext)
+  const { openMessageComposer } = useContext(NodeActionsContext)
+  // Back-compat: a node saved before the messages[] list existed still has
+  // a bare `text` field — shown here (and upgraded to messages[] the moment
+  // the composer saves) rather than needing any migration.
+  const messages = data.messages || (data.text !== undefined ? [{ text: data.text }] : [])
+  let preview = 'No messages yet — tap Edit to add one'
+  if (messages.length === 1) {
+    const only = messages[0]
+    preview = only.text || (only.media_type ? `[${only.media_type}]` : '(empty message)')
+  } else if (messages.length > 1) {
+    preview = `${messages.length} messages in sequence`
+  }
   return (
     <NodeCard id={id} accent="#0a84ff" title="💬 Send Message">
-      <textarea
-        className="nodrag flow-node-textarea"
-        placeholder="Message text…"
-        value={data.text || ''}
-        onChange={(e) => updateNodeData(id, { text: e.target.value })}
-      />
+      <div className="flow-node-body">{preview}</div>
+      <button type="button" className="nodrag flow-node-manage" onClick={() => openMessageComposer(id)}>
+        ✏️ Edit Message
+      </button>
     </NodeCard>
   )
 }
@@ -115,6 +125,17 @@ export function ShopNode({ id }) {
   )
 }
 
+export function OrderStatusNode({ id }) {
+  return (
+    <NodeCard id={id} accent="#30b0c7" title="📦 Order Status">
+      <div className="flow-node-body">
+        Shows the requesting buyer their own recent orders/checkouts — status,
+        items, total, invoice number.
+      </div>
+    </NodeCard>
+  )
+}
+
 export function BroadcastNode({ id }) {
   return (
     <NodeCard id={id} accent="#af52de" title="📢 Broadcast">
@@ -133,5 +154,6 @@ export const nodeTypes = {
   guide_video: GuideVideoNode,
   content_list: ContentListNode,
   shop: ShopNode,
+  order_status: OrderStatusNode,
   broadcast: BroadcastNode,
 }

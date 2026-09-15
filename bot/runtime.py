@@ -2103,6 +2103,102 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         await _register_subscriber(message.from_user.id)
         await run_flow(bot, bot_id, built_bot.flow_definition, command_token, message, state)
 
+    async def _run_command_by_name(command_token: str, message: Message, state: FSMContext) -> bool:
+        """Shared resolver for "run whatever this bot owner attached to
+        `command_token`" — the same legacy-Command-vs-flow-trigger tie-break
+        (newest edit wins) that _has_legacy_action/_has_flow_trigger apply to
+        a typed "/command", reused here for a "jump" button tap
+        (bot/message_buttons.py), which never goes through aiogram's message
+        filters at all. Returns False if nothing runnable is defined for this
+        name — caller decides how to tell the user."""
+        if command_token == "/start":
+            # /start has its own richer resolution — a bot-level force-join
+            # gate, deep links — already implemented by handle_start above.
+            # It's also never a "custom" Command row (_find_legacy_command
+            # below only matches command_type == "custom"; a wizard-defined
+            # /start is command_type == "start" with a completely different
+            # payload shape), so the generic tie-break further down would
+            # always skip straight to the flow-trigger branch regardless of
+            # which was actually edited more recently. Reuse handle_start's
+            # exact logic instead of letting a "jump to /start" button drift
+            # from what typing /start does (deep-link parsing is skipped —
+            # a button tap carries no such text).
+            async with async_session_maker() as session:
+                result = await session.execute(select(BuiltBot).where(BuiltBot.id == bot_id))
+                built_bot = result.scalar_one_or_none()
+
+            # Unconditional, same as handle_start — never leave a stale
+            # deep-link pending from an earlier /start sitting in FSM data.
+            await state.update_data(pending_deep_link=None)
+
+            if await _should_use_flow_for_start(bot_id, built_bot):
+                await _register_subscriber(message.from_user.id, unmute=True)
+                await run_flow(bot, bot_id, built_bot.flow_definition, "/start", message, state)
+                return True
+
+            if built_bot and built_bot.force_join_enabled:
+                missing = await missing_join_channels(bot, bot_id, message.from_user.id)
+                if missing:
+                    await message.answer(
+                        "Please join the channel(s) below to use this bot, then tap "
+                        "\"I've Joined\".",
+                        reply_markup=force_join_keyboard(missing),
+                    )
+                    return True
+
+            await _complete_start(message, message.from_user.id)
+            return True
+
+        command = await _find_legacy_command(command_token)
+        use_legacy = bool(command is not None and command.payload and command.payload.get("action"))
+
+        async with async_session_maker() as session:
+            result = await session.execute(select(BuiltBot).where(BuiltBot.id == bot_id))
+            built_bot = result.scalar_one_or_none()
+
+        flow_node = None
+        if built_bot and built_bot.flow_definition:
+            flow_node = find_trigger_node(built_bot.flow_definition, command_token)
+
+        if use_legacy and flow_node is not None and built_bot.flow_updated_at and built_bot.flow_updated_at > command.updated_at:
+            use_legacy = False  # a more-recently-edited flow trigger wins — same rule as _has_legacy_action
+
+        if use_legacy:
+            if command.visibility == "admin" and message.from_user.id != owner_telegram_id:
+                return False
+            await _register_subscriber(message.from_user.id)
+            await _execute_node(
+                bot, bot_id, command.payload.get("action"), command.payload, message, state,
+                {"resume_legacy_command_id": command.id},
+            )
+            return True
+
+        if flow_node is not None:
+            await _register_subscriber(message.from_user.id)
+            await run_flow(bot, bot_id, built_bot.flow_definition, command_token, message, state)
+            return True
+
+        return False
+
+    @dp.callback_query(F.data.startswith("cmdjump:"))
+    async def handle_command_jump(callback: CallbackQuery, state: FSMContext) -> None:
+        """A "jump" button (bot/message_buttons.py) inside a send_message
+        node/action — fires another command on this same bot exactly as if
+        the tapper had typed it. callback.message is authored by the BOT
+        (Telegram semantics), so its own .from_user is the bot's identity,
+        not the tapper's — model_copy swaps in the real tapper (callback.
+        from_user) before handing off to the shared resolver, which reads
+        message.from_user in several places (personalization, language
+        detection, order lookups, gate checks)."""
+        command_token = (callback.data or "").split(":", 1)[-1]
+        await callback.answer()
+        tapper_message = callback.message.model_copy(update={"from_user": callback.from_user})
+        fired = await _run_command_by_name(command_token, tapper_message, state)
+        if not fired:
+            is_fa = await _end_user_prefers_persian(callback.from_user)
+            text = "این دستور دیگه در دسترس نیست." if is_fa else "This command is no longer available."
+            await callback.message.answer(text)
+
     @dp.message(
         BuiltBotBroadcastStates.waiting_for_message,
         CommandFilter("cancel"),
