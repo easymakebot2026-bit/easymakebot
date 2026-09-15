@@ -284,18 +284,26 @@ function emb_actcodes_rest_check( WP_REST_Request $req ) {
 		return new WP_REST_Response( array( 'ok' => true, 'valid' => false, 'reason' => 'malformed' ), 200 );
 	}
 	$row = $wpdb->get_row( $wpdb->prepare(
-		"SELECT months, days, status FROM " . emb_actcodes_table() . " WHERE code = %s", $code
+		"SELECT months, days, status, redeemed_bot_id, redeemed_by_tg FROM " . emb_actcodes_table() . " WHERE code = %s", $code
 	) );
 	if ( ! $row ) {
 		return new WP_REST_Response( array( 'ok' => true, 'valid' => false, 'reason' => 'not_found' ), 200 );
 	}
-	return new WP_REST_Response( array(
+	$resp = array(
 		'ok'     => true,
 		'valid'  => 'pending' === $row->status,
 		'status' => $row->status,
 		'months' => (int) $row->months,
 		'days'   => (int) $row->days,
-	), 200 );
+	);
+	// Exposed so a caller whose /redeem response was lost in transit (common
+	// on the Germany<->Iran hop) can tell "I already redeemed this myself" —
+	// safe to also treat that as success — apart from "someone else did".
+	if ( 'redeemed' === $row->status ) {
+		$resp['redeemed_bot_id'] = $row->redeemed_bot_id;
+		$resp['redeemed_by_tg']  = (int) $row->redeemed_by_tg;
+	}
+	return new WP_REST_Response( $resp, 200 );
 }
 
 function emb_actcodes_rest_redeem( WP_REST_Request $req ) {

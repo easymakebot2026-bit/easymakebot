@@ -292,7 +292,11 @@ def create_app(bot_token: str) -> web.Application:
 
         parent_id = payload.get("parent_id")
         if parent_id is not None:
-            await reparent_item(built_bot.id, item.id, parent_id)
+            ok = await reparent_item(built_bot.id, item.id, parent_id)
+            if not ok:
+                return web.json_response(
+                    {"error": "invalid parent (cycle, or not in this bot)"}, status=400
+                )
             item = await get_item(item.id)
 
         await sync_bot_commands(built_bot.id)

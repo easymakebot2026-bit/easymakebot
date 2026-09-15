@@ -647,6 +647,14 @@ async def wizard_save_with_parent(callback: CallbackQuery, state: FSMContext) ->
     bot_id = data.get("active_bot_id")
 
     async with async_session_maker() as session:
+        if parent_id is not None:
+            parent = await session.get(ContentItem, parent_id)
+            if parent is None or str(parent.bot_id) != str(bot_id):
+                # A forwarded/replayed callback_data could name a content
+                # item id that belongs to a different bot — never let one
+                # owner's new item get parented under another owner's tree.
+                parent_id = None
+
         product_id = None
         if data.get("is_product"):
             try:

@@ -21,7 +21,8 @@ from aiogram.types import (
     Message,
     ReplyKeyboardRemove,
 )
-from sqlalchemy import select
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from bot import premium_content, pricing, shop
 from bot.config import load_config
@@ -325,7 +326,14 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             )
             if result.scalar_one_or_none() is None:
                 session.add(BotSubscriber(bot_id=bot_id, telegram_id=user_id))
-                await session.commit()
+                try:
+                    await session.commit()
+                except IntegrityError:
+                    # Two concurrent updates from the same user (e.g. a
+                    # double-tap or a retried webhook) can both see "no
+                    # existing row" and both try to insert — harmless race,
+                    # the subscriber row exists either way after this.
+                    await session.rollback()
 
     async def _end_user_prefers_persian(tg_user) -> bool:
         """Persian vs English for one of THIS bot's own subscribers/buyers —
@@ -729,14 +737,38 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             like_row = existing.scalar_one_or_none()
             if like_row is not None:
                 await session.delete(like_row)
-                post.like_count = max(0, post.like_count - 1)
                 liked_now = False
+                delta_expr = func.greatest(BotPost.like_count - 1, 0)
             else:
                 session.add(PostLike(post_id=post_id, liker_telegram_id=liker_id))
-                post.like_count += 1
                 liked_now = True
-            await session.commit()
-            like_count, comment_count = post.like_count, post.comment_count
+                delta_expr = BotPost.like_count + 1
+
+            try:
+                # Atomic UPDATE ... SET like_count = like_count ± 1 instead of
+                # read-modify-write — two concurrent likers hitting the same
+                # post used to be able to both read the same starting count
+                # and overwrite each other's increment (lost update).
+                update_result = await session.execute(
+                    update(BotPost)
+                    .where(BotPost.id == post_id)
+                    .values(like_count=delta_expr)
+                    .returning(BotPost.like_count, BotPost.comment_count)
+                )
+                await session.commit()
+            except IntegrityError:
+                # Same liker double-tapped fast enough for both requests to
+                # see "not liked yet" before either committed the PostLike
+                # row (its unique constraint is what's actually enforcing
+                # correctness here) — treat the loser as a no-op rather than
+                # letting the handler crash.
+                await session.rollback()
+                refreshed = await session.execute(
+                    select(BotPost.like_count, BotPost.comment_count).where(BotPost.id == post_id)
+                )
+                like_count, comment_count = refreshed.one()
+            else:
+                like_count, comment_count = update_result.one()
 
         await callback.answer("👍 Liked!" if liked_now else "Like removed.")
         try:
@@ -789,9 +821,15 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             session.add(
                 PostComment(post_id=post_id, commenter_telegram_id=message.from_user.id, text=text)
             )
-            post.comment_count += 1
+            # Atomic increment — same reasoning as handle_post_like above.
+            update_result = await session.execute(
+                update(BotPost)
+                .where(BotPost.id == post_id)
+                .values(comment_count=BotPost.comment_count + 1)
+                .returning(BotPost.like_count, BotPost.comment_count)
+            )
             await session.commit()
-            like_count, comment_count = post.like_count, post.comment_count
+            like_count, comment_count = update_result.one()
 
         await message.answer("💬 Comment added — thanks!")
 

@@ -1,23 +1,36 @@
 import json
 import os
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, MultiFernet
 from sqlalchemy import LargeBinary
 from sqlalchemy.types import TypeDecorator
 
 
-def _load_key() -> bytes:
-    key = os.getenv("ENCRYPTION_KEY")
-    if not key:
+def _load_fernet() -> MultiFernet:
+    """Builds a MultiFernet from ENCRYPTION_KEY, which may hold one key
+    (the original, backward-compatible format) or several comma-separated
+    keys for gradual key rotation.
+
+    New values are always encrypted with the FIRST key in the list.
+    Decryption tries every key in order, so old rows keep working while
+    ENCRYPTION_KEY still lists their (now-retired) key after the new one.
+    Once every row has been re-saved under the new key (e.g. by re-entering
+    each bot's token), the old key can be dropped from the list.
+    """
+    raw = os.getenv("ENCRYPTION_KEY")
+    if not raw:
         raise ValueError(
             "ENCRYPTION_KEY is not set in .env. "
             "Generate a new key with the command below and put it in .env:\n"
             "python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
         )
-    return key.encode()
+    keys = [part.strip() for part in raw.split(",") if part.strip()]
+    if not keys:
+        raise ValueError("ENCRYPTION_KEY is set but empty after parsing.")
+    return MultiFernet([Fernet(key.encode()) for key in keys])
 
 
-_fernet = Fernet(_load_key())
+_fernet = _load_fernet()
 
 
 class EncryptedJSON(TypeDecorator):

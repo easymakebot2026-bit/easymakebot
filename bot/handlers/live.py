@@ -11,11 +11,12 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from bot import live, platform_billing, website_client
 from bot.config import load_config
 from bot.db.base import async_session_maker
-from bot.db.models import User
+from bot.db.models import RedeemedActivationCode, User
 from bot.filters.admin import IsPlatformAdmin
 from bot.guide import SKIP_BUTTON_TEXT, owner_prefers_persian, normalize_typed_phone, phone_share_keyboard
 from bot.keyboards import (
@@ -295,6 +296,38 @@ async def _apply_activation_code(
     if days <= 0:
         await state.clear()
         text = "❌ این کد هیچ زمانی نداره. با پشتیبانی تماس بگیر." if is_fa else "❌ That code carries no time. Please contact support."
+        await message.answer(text, reply_markup=ReplyKeyboardRemove())
+        return
+
+    # website_client.redeem_activation_code() can legitimately report success
+    # twice for the same code (its own retry recovery — see its docstring),
+    # and a user can also resend the same code after a real failure message.
+    # This ledger makes applying the code's `days` to live_until exactly-once
+    # on the bot's side, regardless of how many times redemption is reported
+    # as successful.
+    # Use the website's normalized form of the code (it collapses casing/
+    # dashes/spacing the same way on every call) as the ledger key, not the
+    # raw text the user typed, so re-typed variants of the same code still
+    # dedupe correctly.
+    ledger_code = str(result.get("code") or code)
+    already_applied = False
+    async with async_session_maker() as session:
+        session.add(RedeemedActivationCode(code=ledger_code, bot_id=built_bot.id))
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            already_applied = True
+
+    if already_applied:
+        await state.clear()
+        built_bot = await live.get_built_bot(bot_id)
+        until_text = f"{built_bot.live_until:%Y-%m-%d %H:%M} UTC" if built_bot and built_bot.live_until else "?"
+        text = (
+            f"✅ این کد قبلاً برای این ربات فعال شده بود — رباتت تا {until_text} فعاله."
+            if is_fa
+            else f"✅ This code was already activated for this bot — it's live until {until_text}."
+        )
         await message.answer(text, reply_markup=ReplyKeyboardRemove())
         return
 

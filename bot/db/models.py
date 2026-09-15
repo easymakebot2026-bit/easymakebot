@@ -775,3 +775,29 @@ class BroadcastLog(Base):
     sent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class RedeemedActivationCode(Base):
+    """Bot-side idempotency ledger for website plan-activation codes.
+
+    The website (bot/website_client.py + the WordPress mu-plugin) already
+    guarantees a code is only ever marked "redeemed" once. What this table
+    guards against is a *different* gap: the bot->website call crosses the
+    Germany<->Iran border, so the website can commit the redemption while its
+    response is lost to us — a retry (automatic, or the user resending the
+    same code) then sees "already_used" for a code that, from the bot's own
+    side, never actually got applied to any bot's live_until yet.
+    website_client.redeem_activation_code() treats that specific case as a
+    success. Before actually extending live_until, bot/handlers/live.py
+    inserts a row here (unique on code) — if the insert fails because the
+    row already exists, this bot has already applied this exact code once,
+    so the extension is skipped instead of being granted a second time.
+    """
+
+    __tablename__ = "redeemed_activation_codes"
+
+    code: Mapped[str] = mapped_column(String(24), primary_key=True)
+    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("built_bots.id"))
+    applied_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
