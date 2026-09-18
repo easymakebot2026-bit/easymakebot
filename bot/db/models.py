@@ -354,6 +354,14 @@ class BotSubscriber(Base):
     # clears this back to False (re-engaging the bot implies opting back in).
     muted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
+    # Website identity verification cache for the flow-builder "verify_gate"
+    # node (bot/flow_engine.py) — same bridge/meaning as User.site_verified/
+    # site_email above, just for a BUILT bot's own end customer instead of a
+    # platform bot-creator. Off unless the bot owner adds that node to their
+    # own flow.
+    site_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    site_email: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

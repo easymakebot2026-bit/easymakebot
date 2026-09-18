@@ -340,3 +340,14 @@ async def init_db() -> None:
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS site_email BYTEA")
         )
+
+        # Same cache, for a BUILT bot's own end customers — flow-builder
+        # "verify_gate" node (bot/flow_engine.py, bot/db/models.py:
+        # BotSubscriber.site_verified/site_email).
+        await conn.execute(
+            text("ALTER TABLE bot_subscribers ADD COLUMN IF NOT EXISTS "
+                 "site_verified BOOLEAN NOT NULL DEFAULT false")
+        )
+        await conn.execute(
+            text("ALTER TABLE bot_subscribers ADD COLUMN IF NOT EXISTS site_email BYTEA")
+        )

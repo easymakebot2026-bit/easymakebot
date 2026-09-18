@@ -98,6 +98,28 @@ class SubscriberOnboardingStates(StatesGroup):
     waiting_for_phone = State()
 
 
+class SubscriberVerifyStates(StatesGroup):
+    """Built-bot side (bot/runtime.py + bot/flow_engine.py's "verify_gate"
+    flow node) — a subscriber's own website-identity verification, gating
+    whatever comes after the node in the owner's flow (typically their shop).
+    Same shape/resume convention as SubscriberOnboardingStates.waiting_for_phone
+    above, just with more steps. channel ("sms"|"email") and which field is
+    still needed are tracked in FSM data, not separate per-channel states,
+    except the field-collection wizard which — like LivePlanStates' verify_*
+    states — asks one question per message."""
+
+    # Only entered for an sms-channel gate with no phone on file yet. Unlike
+    # SubscriberOnboardingStates.waiting_for_phone (the Guide & Video block's
+    # optional share-or-skip step), this one has NO skip — a verification
+    # gate that could be skipped wouldn't gate anything.
+    waiting_for_phone = State()
+    waiting_for_first_name = State()
+    waiting_for_last_name = State()
+    waiting_for_address = State()
+    waiting_for_email = State()
+    waiting_for_code = State()
+
+
 class ShopOrderStates(StatesGroup):
     """Built-bot side (bot/runtime.py) — a buyer's own purchase flow."""
 

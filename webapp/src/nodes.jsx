@@ -12,6 +12,7 @@ export const BLOCK_DEFS = [
   { type: 'content_list', label: '📚 Content List', defaultData: {} },
   { type: 'shop', label: '🛍 Shop', defaultData: {} },
   { type: 'order_status', label: '📦 Order Status', defaultData: {} },
+  { type: 'verify_gate', label: '🪪 Verify Identity', defaultData: { channel: 'email' } },
   { type: 'broadcast', label: '📢 Broadcast', defaultData: {} },
 ]
 
@@ -136,6 +137,29 @@ export function OrderStatusNode({ id }) {
   )
 }
 
+export function VerifyGateNode({ id, data }) {
+  const { updateNodeData } = useContext(NodeActionsContext)
+  const channel = data.channel === 'sms' ? 'sms' : 'email'
+  return (
+    <NodeCard id={id} accent="#ffcc00" title="🪪 Verify Identity">
+      <div className="flow-node-body">
+        Blocks here until the user has a verified account on the website (the
+        same identity check /live uses for bot creators) — put this right
+        before "Shop" to require a verified customer before checkout.
+        Skipped automatically if this isn't set up for the platform.
+      </div>
+      <select
+        className="nodrag flow-node-input"
+        value={channel}
+        onChange={(e) => updateNodeData(id, { channel: e.target.value })}
+      >
+        <option value="email">✉️ Email + code (any customer)</option>
+        <option value="sms">📱 Name/address/phone + SMS code (Iran-style)</option>
+      </select>
+    </NodeCard>
+  )
+}
+
 export function BroadcastNode({ id }) {
   return (
     <NodeCard id={id} accent="#af52de" title="📢 Broadcast">
@@ -155,5 +179,6 @@ export const nodeTypes = {
   content_list: ContentListNode,
   shop: ShopNode,
   order_status: OrderStatusNode,
+  verify_gate: VerifyGateNode,
   broadcast: BroadcastNode,
 }

@@ -713,54 +713,11 @@ async def receive_plan_payment_phone_text(message: Message, state: FSMContext) -
 # See _start_plan_payment_flow's call site above for when this runs.
 
 
-_VERIFY_ERRORS_EN = {
-    "tos_required": "You need to accept the Terms of Service to continue.",
-    "bad_email": "That doesn't look like a valid email address.",
-    "bad_phone": "That doesn't look like a valid phone number.",
-    "missing_fields": "Please send all the requested details.",
-    "phone_taken": "That phone number is already verified on another account. Please contact support.",
-    "email_taken": "That email is already verified on another account. Please contact support.",
-    "no_target": "No pending verification found — please start again.",
-    "no_pending": "No code is pending — request a new one.",
-    "expired": "That code expired — request a new one.",
-    "too_many": "Too many wrong attempts — request a new code.",
-    "mismatch": "That code is incorrect.",
-    "too_soon": "Please wait a bit before requesting another code.",
-    "too_many_sends": "Too many codes requested — please try again in an hour.",
-    "send_failed": "Couldn't send the code. Please try again shortly.",
-    "rate_limited": "Too many attempts — please try again in a few minutes.",
-    "not_configured": "Verification isn't available right now.",
-    "network": "Couldn't reach the verification service. Please try again in a minute.",
-    "bad_response": "The verification service returned an unexpected response.",
-    "server": "Something went wrong on our end. Please try again.",
-}
-_VERIFY_ERRORS_FA = {
-    "tos_required": "برای ادامه باید قوانین استفاده رو بپذیری.",
-    "bad_email": "این یه ایمیل معتبر به نظر نمی‌رسه.",
-    "bad_phone": "این یه شماره معتبر به نظر نمی‌رسه.",
-    "missing_fields": "لطفاً همه‌ی موارد خواسته‌شده رو بفرست.",
-    "phone_taken": "این شماره قبلاً روی یه حساب دیگه تأیید شده. با پشتیبانی تماس بگیر.",
-    "email_taken": "این ایمیل قبلاً روی یه حساب دیگه تأیید شده. با پشتیبانی تماس بگیر.",
-    "no_target": "تأییدی در انتظار پیدا نشد — از اول شروع کن.",
-    "no_pending": "کدی در انتظار نیست — یه کد جدید بگیر.",
-    "expired": "این کد منقضی شده — یه کد جدید بگیر.",
-    "too_many": "تلاش نادرست زیاد بود — یه کد جدید بگیر.",
-    "mismatch": "این کد درست نیست.",
-    "too_soon": "یه کم صبر کن، بعد دوباره کد بگیر.",
-    "too_many_sends": "درخواست کد زیاد شد — یه ساعت دیگه امتحان کن.",
-    "send_failed": "ارسال کد ناموفق بود. یه کم دیگه دوباره امتحان کن.",
-    "rate_limited": "تلاش زیاد بود — چند دقیقه‌ی دیگه امتحان کن.",
-    "not_configured": "تأیید هویت الان در دسترس نیست.",
-    "network": "اتصال به سرویس تأیید برقرار نشد. یه دقیقه دیگه دوباره امتحان کن.",
-    "bad_response": "سرویس تأیید پاسخ غیرمنتظره‌ای برگردوند.",
-    "server": "یه مشکلی پیش اومد. دوباره امتحان کن.",
-}
-
-
-def _verify_error_text(is_fa: bool, err: str) -> str:
-    if is_fa:
-        return _VERIFY_ERRORS_FA.get(err, f"خطا ({err}). با پشتیبانی تماس بگیر.")
-    return _VERIFY_ERRORS_EN.get(err, f"Error ({err}). Please contact support.")
+# Bilingual error text for every verify_* error code lives in
+# bot/website_client.py:verify_error_text — shared with bot/runtime.py's
+# flow-builder verify_gate node so the two surfaces never drift on wording
+# for the same bridge/error vocabulary.
+_verify_error_text = website_client.verify_error_text
 
 
 async def _mark_site_verified(telegram_id: int, email: str | None = None) -> None:

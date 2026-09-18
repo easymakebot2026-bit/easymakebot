@@ -56,6 +56,24 @@ Node types:
   being listed twice. Silently skipped if there are no standalone products yet.
 - order_status: sends the requesting buyer their own recent orders/checkouts
   (bot/shop.py:list_buyer_orders) — status, items, total, invoice number.
+- verify_gate: requires the subscriber to have a verified identity on the
+  marketing website (the same `emb_verified` account and OTP machinery
+  /live's own payment gate uses for bot CREATORS — bot/handlers/live.py,
+  web/wordpress/wp-content/mu-plugins/emb-bot-verify.php) before letting the
+  flow continue past this node — e.g. placed right before a "shop" node to
+  require a verified customer before checkout. data: {"channel": "email"|
+  "sms"}, default "email" (just an address + a code — works for any
+  audience). "sms" mirrors the Iranian site registration fields (name/last/
+  phone/address/email + an SMS code); asks for a phone first if none is on
+  file yet (own dedicated state, no skip — unlike the Guide & Video block's
+  optional phone share, a gate that could be skipped wouldn't gate
+  anything). Silently skipped (flow continues immediately) if
+  WEBSITE_VERIFY_KEY isn't configured on this install, or if the website
+  can't be reached right now — never hard-blocks a buyer's whole flow over
+  a transient network issue. See bot/runtime.py for the
+  SubscriberVerifyStates.* handlers that collect the fields/code and resume
+  the flow afterwards (same resume convention as force_join_gate/guide_video
+  above).
 - broadcast: a no-op placeholder in the flow itself. The actual broadcast is
   triggered by the owner sending a message after this command, which is
   still handled by the existing BuiltBotBroadcastStates flow in runtime.py.
@@ -82,7 +100,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
-from bot import shop
+from bot import shop, website_client
 from bot.content_nav import CONTENT_PAGE_SIZE, count_children, folder_ids_among, get_children
 from bot.db.base import async_session_maker
 from bot.db.models import BotSubscriber, Product
@@ -90,7 +108,7 @@ from bot.force_join_gate import force_join_keyboard, missing_join_channels
 from bot.guide import end_user_prefers_persian, phone_share_keyboard, send_built_bot_guide
 from bot.keyboards import CONTENT_MENU_HEADING, content_menu_keyboard
 from bot.message_buttons import build_inline_keyboard
-from bot.states import SubscriberOnboardingStates
+from bot.states import SubscriberOnboardingStates, SubscriberVerifyStates
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +152,126 @@ async def _subscriber_phone(bot_id: uuid.UUID, user_id: int) -> str | None:
         )
         subscriber = result.scalar_one_or_none()
         return subscriber.phone_number if subscriber else None
+
+
+async def _get_subscriber(bot_id: uuid.UUID, user_id: int) -> BotSubscriber | None:
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(BotSubscriber).where(
+                BotSubscriber.bot_id == bot_id, BotSubscriber.telegram_id == user_id
+            )
+        )
+        return result.scalar_one_or_none()
+
+
+async def _mark_subscriber_verified(bot_id: uuid.UUID, user_id: int, email: str | None) -> None:
+    async with async_session_maker() as session:
+        result = await session.execute(
+            select(BotSubscriber).where(
+                BotSubscriber.bot_id == bot_id, BotSubscriber.telegram_id == user_id
+            )
+        )
+        subscriber = result.scalar_one_or_none()
+        if subscriber is not None:
+            subscriber.site_verified = True
+            if email:
+                subscriber.site_email = email
+            await session.commit()
+
+
+def _verify_gate_code_prompt(is_fa: bool, channel: str) -> str:
+    via = ("پیامک" if channel == "sms" else "ایمیل") if is_fa else ("SMS" if channel == "sms" else "email")
+    if is_fa:
+        return f"کد ۶ رقمی که با {via} فرستادیم رو بفرست."
+    return f"Send the 6-digit code we just sent by {via}."
+
+
+def _verify_gate_intro_sms(is_fa: bool) -> str:
+    if is_fa:
+        return "برای ادامه باید هویتت تأیید بشه. اول اسمت رو بفرست."
+    return "To continue, we need to verify your identity. First, send your first name."
+
+
+def _verify_gate_intro_email(is_fa: bool) -> str:
+    if is_fa:
+        return "برای ادامه باید هویتت تأیید بشه. ایمیلت رو بفرست تا یه کد تأیید براش بفرستیم."
+    return "To continue, we need to verify your identity. Send your email so we can send a verification code."
+
+
+async def _run_verify_gate(
+    bot_id: uuid.UUID,
+    data: dict[str, Any],
+    message: Message,
+    state: FSMContext,
+    resume_state_data: dict[str, Any],
+) -> bool:
+    """"verify_gate" flow node — see the module docstring above for the full
+    picture. Returns True if the walk should stop here (paused, waiting on
+    the subscriber) — same convention as force_join_gate/guide_video."""
+    if not website_client.verify_is_configured():
+        return False
+
+    channel = "sms" if data.get("channel") == "sms" else "email"
+    telegram_id = message.from_user.id
+    subscriber = await _get_subscriber(bot_id, telegram_id)
+    if subscriber is not None and subscriber.site_verified:
+        return False
+
+    is_fa = await end_user_prefers_persian(bot_id, message.from_user)
+
+    if channel == "sms" and (subscriber is None or not subscriber.phone_number):
+        await state.set_state(SubscriberVerifyStates.waiting_for_phone)
+        await state.update_data(**resume_state_data, verify_gate_channel=channel)
+        text = (
+            "برای تأیید هویت، شماره‌ات رو با دکمه‌ی زیر بفرست."
+            if is_fa
+            else "To verify your identity, share your phone number with the button below."
+        )
+        await message.answer(text, reply_markup=phone_share_keyboard())
+        return True
+
+    phone = (subscriber.phone_number or "").strip() if subscriber else ""
+    email = (subscriber.site_email or "").strip() if subscriber else ""
+
+    status = await website_client.check_verification_status(
+        channel, phone=phone or None, email=email or None
+    )
+    if not status.get("ok"):
+        # Network/config trouble reaching the site — never hard-block the
+        # buyer's whole flow over a transient issue; same graceful-omit
+        # spirit as verify_is_configured() above.
+        logger.warning(
+            "verify_gate: status check failed (%s) — letting the flow continue", status.get("error")
+        )
+        return False
+
+    if status.get("verified"):
+        await _mark_subscriber_verified(bot_id, telegram_id, email or None)
+        return False
+
+    await state.update_data(**resume_state_data, verify_gate_channel=channel)
+
+    if status.get("registered"):
+        # Already has an account for this phone/email — no need to re-collect
+        # name/address, just send it a fresh code.
+        resend = await website_client.resend_verification(channel, phone=phone or None, email=email or None)
+        if not resend.get("ok"):
+            logger.warning(
+                "verify_gate: resend failed (%s) — letting the flow continue", resend.get("error")
+            )
+            return False
+        await state.update_data(verify_gate_phone=phone or None, verify_gate_email=email or None)
+        await state.set_state(SubscriberVerifyStates.waiting_for_code)
+        await message.answer(_verify_gate_code_prompt(is_fa, channel))
+        return True
+
+    if channel == "sms":
+        await state.set_state(SubscriberVerifyStates.waiting_for_first_name)
+        await message.answer(_verify_gate_intro_sms(is_fa))
+    else:
+        await state.set_state(SubscriberVerifyStates.waiting_for_email)
+        await message.answer(_verify_gate_intro_email(is_fa))
+    return True
 
 
 _ORDER_STATUS_LABELS_EN = {
@@ -452,6 +590,8 @@ async def _execute_node(
     elif node_type == "order_status":
         is_fa = await end_user_prefers_persian(bot_id, message.from_user)
         await send_order_status(bot_id, message, is_fa)
+    elif node_type == "verify_gate":
+        return await _run_verify_gate(bot_id, data, message, state, resume_state_data)
     # "broadcast" nodes are a marker only — see module docstring.
 
     return False
