@@ -402,8 +402,8 @@
 #### `_terms_line() -> str`
 - **چه‌کار می‌کند:** اگر `_config.website_url` تنظیم شده باشد، یک خط لینک به «Terms of Service» (`{website_url}/terms/`) برمی‌گرداند تا به انتهای پیام‌های پرداخت اضافه شود؛ وگرنه رشتهٔ خالی.
 
-#### `_start_plan_payment_flow(target, state, plan_key, method, bot_id, remove_kb=False) -> None`
-تابع مرکزی که واقعاً `LivePayment` می‌سازد و لینک/دستورالعمل پرداخت را به کاربر می‌دهد؛ طبق docstring خودش، **فقط پس از این اجرا می‌شود که یک شماره تلفن Telegram-verified برای مالک در دست باشد.**
+#### `_start_plan_payment_flow(target, state, plan_key, method, bot_id, telegram_id, remove_kb=False, is_fa=False) -> None`
+تابع مرکزی که واقعاً `LivePayment` می‌سازد و لینک/دستورالعمل پرداخت را به کاربر می‌دهد؛ طبق docstring خودش، **فقط پس از این اجرا می‌شود که یک شماره تلفن Telegram-verified برای مالک در دست باشد.** پارامتر `telegram_id` (بعداً اضافه شد — بخش «به‌روزرسانی: گیت تأیید هویت سایت» پایین همین فایل) برای گیت تأیید هویت سایت لازمه؛ برای `method in ("zarinpal","ton")` قبل از ساختن `LivePayment` صدا زده می‌شه.
 - اگر `remove_kb=True` (یعنی از مسیر «بعد از دریافت شماره تلفن» آمده)، ابتدا صفحه‌کلید reply (دکمهٔ اشتراک شماره) با یک «Thanks! 🙌» حذف می‌شود.
 - `payment = platform_billing.create_live_payment(bot_id, plan_key, method)`؛ اگر `None` (پلن نامعتبر) state پاک و پیام خطا.
 - **مسیر Zarinpal/Stripe:** state پاک می‌شود (`None`)، تابع شروع‌کنندهٔ مناسب (`start_zarinpal_live_payment` یا `start_stripe_live_payment`) صدا زده می‌شود؛ اگر `pay_url` نبود خطا؛ وگرنه یک دکمهٔ inline لینک‌دار «🔗 Pay Now» + خط قوانین (`_terms_line`) فرستاده می‌شود.
@@ -491,3 +491,40 @@
 - ⚪️ هنوز فعال نشده
 
 تشخیص «پرداختی» بودن: وجود حداقل یک `LivePayment` با `status="paid"` **یا** یک `RedeemedActivationCode` برای همون `bot_id` — هر دو یعنی یه پرداخت واقعی اتفاق افتاده (چه داخل بات، چه با کد خریداری‌شده از سایت). اگه هیچ‌کدوم نبود ولی `live_until` ست شده، یعنی از تست رایگان استفاده شده. در پایین پیام هم لیست جدای بات‌های با اشتراک پرداختی، و یک خط جمع‌بندی (تعداد کل / پرداختی / آزمایشی) نشون داده می‌شه.
+
+---
+
+## به‌روزرسانی: گیت تأیید هویت سایت قبل از پرداخت زرین‌پال/TON در `/live`
+
+هدف: تا الان، پراکسی زرین‌پال (بخش ۱ بالا) اجازه می‌داد یه کاربر ایرانی بدون رفتن به سایت **پرداخت** کنه، ولی خودِ سایت (`emb-accounts.php`) قبل از هر خریدی یه حساب **تأیید‌شده** (نام/نام‌خانوادگی/تلفن/آدرس/ایمیل + کد پیامکی برای ایرانی، ایمیل + کد ایمیلی برای غیرایرانی) لازم داره — این دو تا با هم هماهنگ نبودن. این بخش یه پل جدید اضافه می‌کنه که همون ثبت‌نام و تأییدیه رو مستقیم داخل بات انجام می‌ده، دقیقاً همون فیلدها و همون منطق OTP سایت، بدون این‌که کاربر لازم باشه مرورگر باز کنه.
+
+### ۱. پل REST جدید — `web/wordpress/wp-content/mu-plugins/emb-bot-verify.php`
+
+مسیرهای REST سایت موجود (`auth-start`/`auth-verify`/`otp-verify`/`otp-resend` در `emb-accounts.php`) بر پایهٔ کوکی/سشن مرورگرن — برای یه caller سرور-به-سرور بدون سشن کار نمی‌کنن. این mu-plugin جدید، دقیقاً با همون الگوی امنیتی بقیهٔ پل‌ها (هدر `X-EMB-Key` با `hash_equals` + `trim`، ریت‌لیمیت روی IP)، چهار مسیر جدید اضافه می‌کنه که مستقیماً همون توابع سراسری `emb-accounts.php` (`emb_otp_send`/`emb_otp_verify`/`emb_is_verified`/`emb_phone_taken`/...) رو صدا می‌زنن، پس **یک** هویت (`emb_verified` روی هر کاربر وردپرس) بین سایت و بات مشترکه:
+
+- `POST /wp-json/emb/v1/bot-verify/status` → `{registered, verified}` برای یه شماره/ایمیل، بدون ساختن چیزی.
+- `POST /wp-json/emb/v1/bot-verify/start` → حساب رو می‌سازه/پیدا می‌کنه (ایران: نام+نام‌خانوادگی+تلفن+آدرس+ایمیل لازمه، مثل فرم ثبت‌نام ووکامرس؛ بین‌المللی: فقط ایمیل، مثل فرم passwordless سایت) و اولین کد OTP رو می‌فرسته. اگه شماره از قبل روی یه حساب **تأییدشدهٔ** دیگه باشه `phone_taken`/`email_taken` برمی‌گرده (همون قانونی که فرم ثبت‌نام سایت هم داره).
+- `POST /wp-json/emb/v1/bot-verify/resend` → برای حسابی که از قبل ثبت‌نام شده ولی تأیید نشده، یه کد تازه می‌فرسته بدون این‌که دوباره فیلدها رو بپرسه.
+- `POST /wp-json/emb/v1/bot-verify/confirm` → کد رو چک می‌کنه؛ موفق یعنی `emb_verified='1'` ست می‌شه (دقیقاً همون فلگی که چک‌اوت سایت هم روش گیت شده).
+
+هویت تلگرام (id/username/first_name) روی `user_meta` (`emb_bot_telegram_id` و...) ذخیره می‌شه — صرفاً برای ردیابی سوءاستفاده، مثل کاری که `emb-activation-codes.php` با هویت redeemer می‌کنه.
+
+### ۲. سمت بات — `bot/website_client.py` + `bot/db/models.py:User`
+
+`bot/website_client.py` چهار تابع async جدید داره (`check_verification_status`/`start_verification`/`resend_verification`/`confirm_verification`) که همون الگوی retry/`X-EMB-Key` تابع `_post` موجود رو استفاده می‌کنن، با یه کلید جدا (`WEBSITE_VERIFY_KEY`، باید برابر `EMB_BOT_VERIFY_KEY` سمت سایت باشه — کلید جدا از `WEBSITE_ACTIVATION_KEY`/`ZARINPAL_PROXY_KEY` برای least-privilege).
+
+`User` دو ستون جدید داره: `site_verified` (bool، کش محلی فلگ سایت — یه‌بار true شد دیگه هیچ‌وقت دوباره چک نمی‌شه چون وردپرس هیچ‌وقت verified رو false نمی‌کنه) و `site_email` (رمزنگاری‌شده مثل `phone_number`، فقط برای مسیر بین‌المللی که تلفن نداره).
+
+### ۳. سمت هندلر — `bot/handlers/live.py:_ensure_site_verified` + `bot/states.py`
+
+گیت داخل خودِ `_start_plan_payment_flow` نشسته (نه در دو نقطهٔ فراخوانیش)، فقط برای `method in ("zarinpal", "ton")` — Stripe (که خودش کارت رو verify می‌کنه) و کد فعال‌سازی خریداری‌شده از سایت (که همون‌جا verified بوده) دست‌نخورده می‌مونن. اگه `WEBSITE_VERIFY_KEY` ست نشده باشه، گیت کلاً رد می‌شه (رفتار قبلی بدون تغییر — graceful-omit، مثل بقیهٔ فیچرهای پل وب‌سایت).
+
+جریان:
+1. اگه `user.site_verified` از قبل true باشه، بدون هیچ تماس شبکه‌ای رد می‌شه.
+2. وگرنه `bot-verify/status` چک می‌شه. اگه `verified` باشه، کش محلی ست می‌شه و ادامه.
+3. اگه `registered` باشه ولی تأیید نشده (مثلاً قبلاً نصفه‌کاره تو سایت ثبت‌نام کرده)، مستقیم `bot-verify/resend` صدا زده می‌شه و کاربر فقط کد رو می‌فرسته — فیلدها دوباره پرسیده نمی‌شن.
+4. وگرنه یه ویزارد تک‌سوالی شروع می‌شه: ایران → نام (`waiting_for_verify_first_name`) → نام‌خانوادگی → آدرس → ایمیل، هر کدوم یه state جدا در `LivePlanStates`؛ بین‌المللی → فقط ایمیل. تلفن ایرانی از قبل موجوده (چون قبل از این مرحله همیشه لازم بوده).
+5. بعد از جمع‌شدن فیلدها، `bot-verify/start` صدا زده می‌شه (کد فرستاده می‌شه) و state می‌ره روی `waiting_for_verify_code` (مشترک بین دو کانال). `/resend` هم همون‌جا هندل می‌شه.
+6. تأیید موفق کد → `User.site_verified=True` ست می‌شه و `_start_plan_payment_flow` **دوباره** صدا زده می‌شه (با همون `plan_key`/`method` که در `pending_plan_pay` داخل FSM data کش شده بود) — این‌بار گیت رد می‌شه و پرداخت واقعی شروع می‌شه.
+
+تنظیمات لازم (سمت سایت `web/.env.example`: `EMB_BOT_VERIFY_KEY`؛ سمت بات `.env.example` + `deploy/.env.bot.example`: `WEBSITE_VERIFY_KEY`، باید برابر باشن). خالی گذاشتنشون یعنی این گیت کلاً غیرفعاله و همه‌چیز دقیقاً مثل قبل کار می‌کنه.

@@ -46,11 +46,18 @@ def is_configured() -> bool:
     return bool(_config.website_url and _config.website_activation_key)
 
 
-async def _post(path: str, payload: dict) -> dict:
-    if not is_configured():
+async def _post(path: str, payload: dict, *, key: str | None = None) -> dict:
+    """`key` defaults to the activation-code bridge's key so existing call
+    sites (redeem_activation_code) are unaffected; verify_* below pass
+    website_verify_key instead — each bridge has its own X-EMB-Key for
+    least-privilege (a leaked activation key can't call the verify bridge
+    and vice versa)."""
+    if key is None:
+        key = _config.website_activation_key
+    if not _config.website_url or not key:
         return {"ok": False, "error": "not_configured"}
     url = f"{_config.website_url}{path}"
-    headers = {"X-EMB-Key": _config.website_activation_key}
+    headers = {"X-EMB-Key": key}
 
     last_error = "network"
     for attempt in range(1, _RETRIES + 1):
@@ -165,3 +172,119 @@ async def redeem_activation_code(
             }
 
     return result
+
+
+# --- Registration + OTP verification bridge -------------------------------
+# (web/wordpress/wp-content/mu-plugins/emb-bot-verify.php) — lets a bot
+# creator with no website account yet register (Iran: name/last/phone/
+# address/email + SMS code; international: email + email code) directly
+# inside the bot, so a foreign phone/PC isn't required just to buy a plan.
+# Used by bot/handlers/live.py's /live payment flow, and (per bot owner's
+# own choice) the flow-builder verification-gate node for a BUILT bot's own
+# shop checkout — same bridge, same single `emb_verified` identity either
+# way. Uses website_verify_key, a separate X-EMB-Key from the activation
+# bridge above (least privilege — see _post's docstring).
+
+
+def verify_is_configured() -> bool:
+    return bool(_config.website_url and _config.website_verify_key)
+
+
+async def _verify_post(path: str, payload: dict) -> dict:
+    return await _post(path, payload, key=_config.website_verify_key)
+
+
+async def check_verification_status(
+    channel: str, *, phone: str | None = None, email: str | None = None
+) -> dict:
+    """POST /wp-json/emb/v1/bot-verify/status.
+
+    Success: {"ok": True, "registered": bool, "verified": bool}
+    """
+    payload: dict = {"channel": channel}
+    if phone:
+        payload["phone"] = phone
+    if email:
+        payload["email"] = email
+    return await _verify_post("/wp-json/emb/v1/bot-verify/status", payload)
+
+
+async def start_verification(
+    channel: str,
+    *,
+    phone: str | None = None,
+    email: str,
+    first_name: str | None = None,
+    last_name: str | None = None,
+    address: str | None = None,
+    tos: bool = True,
+    telegram_id: int | None = None,
+    telegram_username: str | None = None,
+    telegram_first_name: str | None = None,
+) -> dict:
+    """POST /wp-json/emb/v1/bot-verify/start — creates/finds the account and
+    sends the first OTP. `email` is required for both channels (channel=sms
+    still needs one — mirrors the website's own fa registration form, which
+    is a WooCommerce account and therefore always has an email on it).
+
+    Success: {"ok": True} or {"ok": True, "already_verified": True} (no code
+    was sent — the account was already verified, e.g. a retry after a lost
+    response).
+    Failure: {"ok": False, "error": "tos_required" | "bad_email" |
+              "bad_phone" | "missing_fields" | "phone_taken" | "email_taken"
+              | "server" | "rate_limited" | "send_failed" | "too_soon" |
+              "too_many_sends" | "not_configured" | "network" | ...}
+    """
+    payload: dict = {"channel": channel, "email": email, "tos": bool(tos)}
+    if phone:
+        payload["phone"] = phone
+    if first_name:
+        payload["first_name"] = first_name
+    if last_name:
+        payload["last_name"] = last_name
+    if address:
+        payload["address"] = address
+    if telegram_id:
+        payload["telegram_id"] = int(telegram_id)
+    if telegram_username:
+        payload["telegram_username"] = str(telegram_username)
+    if telegram_first_name:
+        payload["telegram_first_name"] = str(telegram_first_name)
+    return await _verify_post("/wp-json/emb/v1/bot-verify/start", payload)
+
+
+async def resend_verification(
+    channel: str, *, phone: str | None = None, email: str | None = None
+) -> dict:
+    """POST /wp-json/emb/v1/bot-verify/resend — for an account that's already
+    registered (on the site or via a previous start_verification call) but
+    not yet verified; sends a fresh code to the destination already on file.
+
+    Success: {"ok": True, "channel": "sms"|"email"} or
+             {"ok": True, "already_verified": True}
+    Failure: {"ok": False, "error": "no_target" | "rate_limited" |
+              "too_soon" | "too_many_sends" | "send_failed" | ...}
+    """
+    payload: dict = {"channel": channel}
+    if phone:
+        payload["phone"] = phone
+    if email:
+        payload["email"] = email
+    return await _verify_post("/wp-json/emb/v1/bot-verify/resend", payload)
+
+
+async def confirm_verification(
+    channel: str, code: str, *, phone: str | None = None, email: str | None = None
+) -> dict:
+    """POST /wp-json/emb/v1/bot-verify/confirm.
+
+    Success: {"ok": True, "verified": True}
+    Failure: {"ok": False, "error": "no_pending" | "expired" | "too_many" |
+              "mismatch" | "rate_limited" | "network" | ...}
+    """
+    payload: dict = {"channel": channel, "code": code}
+    if phone:
+        payload["phone"] = phone
+    if email:
+        payload["email"] = email
+    return await _verify_post("/wp-json/emb/v1/bot-verify/confirm", payload)

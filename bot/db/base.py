@@ -329,3 +329,14 @@ async def init_db() -> None:
             text("ALTER TABLE shop_settings ADD COLUMN IF NOT EXISTS "
                  "my_account_enabled BOOLEAN NOT NULL DEFAULT false")
         )
+
+        # Website identity verification cache (bot/db/models.py:User.site_verified/
+        # site_email) — gates /live's Zarinpal/TON plan payments, see
+        # bot/handlers/live.py:_ensure_site_verified.
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                 "site_verified BOOLEAN NOT NULL DEFAULT false")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS site_email BYTEA")
+        )

@@ -144,3 +144,17 @@ class LivePlanStates(StatesGroup):
     # works at any time and clears this state.
     waiting_for_region_phone = State()
     waiting_for_plan_payment_phone = State()
+    # Website identity verification gate before a Zarinpal (Iran) or TON
+    # (international) /live plan payment, when the owner has no verified
+    # account on the marketing website yet (bot/handlers/live.py:
+    # _ensure_site_verified, bot/website_client.py verify_* functions).
+    # Iran field-collection wizard, one question at a time (phone is already
+    # on file by this point — see LivePlanStates above):
+    waiting_for_verify_first_name = State()
+    waiting_for_verify_last_name = State()
+    waiting_for_verify_address = State()
+    # Also the ONLY collection step for an international owner (email only —
+    # mirrors the website's own passwordless email flow).
+    waiting_for_verify_email = State()
+    # Shared by both channels — enter the 6-digit code just sent.
+    waiting_for_verify_code = State()

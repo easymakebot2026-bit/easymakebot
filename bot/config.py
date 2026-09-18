@@ -49,6 +49,15 @@ class Config:
     # PLATFORM_ONBOT_ZARINPAL=true without the bot itself being on an Iran IP.
     zarinpal_proxy_url: str | None
     zarinpal_proxy_key: str | None
+    # Bot-callable bridge to emb-accounts.php's registration + OTP system
+    # (web/wordpress/wp-content/mu-plugins/emb-bot-verify.php) — lets /live
+    # (and, via the flow-builder verification node, any built bot's own
+    # shop) collect the same fields the website collects and verify a code,
+    # for a person who has no account on the website yet. Reuses website_url
+    # above as the base URL; both must be set for the gate to activate —
+    # otherwise it's silently skipped (graceful-omit, same as everything
+    # else website-bridge related).
+    website_verify_key: str | None
 
 
 def load_config() -> Config:
@@ -75,6 +84,7 @@ def load_config() -> Config:
     )
     zarinpal_proxy_url = (os.getenv("ZARINPAL_PROXY_URL") or "").strip().rstrip("/") or None
     zarinpal_proxy_key = (os.getenv("ZARINPAL_PROXY_KEY") or "").strip() or None
+    website_verify_key = (os.getenv("WEBSITE_VERIFY_KEY") or "").strip() or None
 
     if not bot_token:
         raise ValueError(
@@ -106,4 +116,5 @@ def load_config() -> Config:
         platform_onbot_zarinpal=platform_onbot_zarinpal,
         zarinpal_proxy_url=zarinpal_proxy_url,
         zarinpal_proxy_key=zarinpal_proxy_key,
+        website_verify_key=website_verify_key,
     )

@@ -557,6 +557,7 @@ def _terms_line(is_fa: bool) -> str:
 
 async def _start_plan_payment_flow(
     target: Message, state: FSMContext, plan_key: str, method: str, bot_id: str,
+    telegram_id: int,
     remove_kb: bool = False,
     is_fa: bool = False,
 ) -> None:
@@ -566,6 +567,23 @@ async def _start_plan_payment_flow(
     if remove_kb:
         text = "ممنون! 🙌" if is_fa else "Thanks! 🙌"
         await target.answer(text, reply_markup=ReplyKeyboardRemove())
+
+    if method in ("zarinpal", "ton"):
+        # One-time identity check before a Zarinpal/TON payment: the owner
+        # needs a verified account on the marketing website (same
+        # `emb_verified` flag the website itself gates plan purchases on —
+        # see web/wordpress/wp-content/mu-plugins/emb-accounts.php). If they
+        # never visited the website, this collects the same fields it would
+        # have and sends an OTP, right here in the bot. Suspends the flow
+        # (returns without creating a LivePayment) until verified; the
+        # eventual code-confirm handler below resumes by re-entering this
+        # same function. Silently skipped if WEBSITE_VERIFY_KEY isn't
+        # configured on this install (graceful-omit).
+        verified = await _ensure_site_verified(
+            target, state, plan_key, method, bot_id, telegram_id, is_fa
+        )
+        if not verified:
+            return
 
     payment = await platform_billing.create_live_payment(bot_id, plan_key, method)
     if payment is None:
@@ -640,7 +658,10 @@ async def start_plan_payment(callback: CallbackQuery, state: FSMContext) -> None
         )
         return
 
-    await _start_plan_payment_flow(callback.message, state, plan_key, method, str(bot_id), is_fa=is_fa)
+    await _start_plan_payment_flow(
+        callback.message, state, plan_key, method, str(bot_id),
+        telegram_id=callback.from_user.id, is_fa=is_fa,
+    )
 
 
 async def _resume_plan_payment_after_phone(message: Message, state: FSMContext, phone: str) -> None:
@@ -655,7 +676,8 @@ async def _resume_plan_payment_after_phone(message: Message, state: FSMContext, 
         await message.answer(text, reply_markup=ReplyKeyboardRemove())
         return
     await _start_plan_payment_flow(
-        message, state, pend["plan_key"], pend["method"], str(bot_id), remove_kb=True, is_fa=is_fa
+        message, state, pend["plan_key"], pend["method"], str(bot_id),
+        telegram_id=message.from_user.id, remove_kb=True, is_fa=is_fa,
     )
 
 
@@ -685,6 +707,324 @@ async def receive_plan_payment_phone_text(message: Message, state: FSMContext) -
         )
         return
     await _resume_plan_payment_after_phone(message, state, phone)
+
+
+# --- Website identity verification gate (Zarinpal / TON only) -------------
+# See _start_plan_payment_flow's call site above for when this runs.
+
+
+_VERIFY_ERRORS_EN = {
+    "tos_required": "You need to accept the Terms of Service to continue.",
+    "bad_email": "That doesn't look like a valid email address.",
+    "bad_phone": "That doesn't look like a valid phone number.",
+    "missing_fields": "Please send all the requested details.",
+    "phone_taken": "That phone number is already verified on another account. Please contact support.",
+    "email_taken": "That email is already verified on another account. Please contact support.",
+    "no_target": "No pending verification found — please start again.",
+    "no_pending": "No code is pending — request a new one.",
+    "expired": "That code expired — request a new one.",
+    "too_many": "Too many wrong attempts — request a new code.",
+    "mismatch": "That code is incorrect.",
+    "too_soon": "Please wait a bit before requesting another code.",
+    "too_many_sends": "Too many codes requested — please try again in an hour.",
+    "send_failed": "Couldn't send the code. Please try again shortly.",
+    "rate_limited": "Too many attempts — please try again in a few minutes.",
+    "not_configured": "Verification isn't available right now.",
+    "network": "Couldn't reach the verification service. Please try again in a minute.",
+    "bad_response": "The verification service returned an unexpected response.",
+    "server": "Something went wrong on our end. Please try again.",
+}
+_VERIFY_ERRORS_FA = {
+    "tos_required": "برای ادامه باید قوانین استفاده رو بپذیری.",
+    "bad_email": "این یه ایمیل معتبر به نظر نمی‌رسه.",
+    "bad_phone": "این یه شماره معتبر به نظر نمی‌رسه.",
+    "missing_fields": "لطفاً همه‌ی موارد خواسته‌شده رو بفرست.",
+    "phone_taken": "این شماره قبلاً روی یه حساب دیگه تأیید شده. با پشتیبانی تماس بگیر.",
+    "email_taken": "این ایمیل قبلاً روی یه حساب دیگه تأیید شده. با پشتیبانی تماس بگیر.",
+    "no_target": "تأییدی در انتظار پیدا نشد — از اول شروع کن.",
+    "no_pending": "کدی در انتظار نیست — یه کد جدید بگیر.",
+    "expired": "این کد منقضی شده — یه کد جدید بگیر.",
+    "too_many": "تلاش نادرست زیاد بود — یه کد جدید بگیر.",
+    "mismatch": "این کد درست نیست.",
+    "too_soon": "یه کم صبر کن، بعد دوباره کد بگیر.",
+    "too_many_sends": "درخواست کد زیاد شد — یه ساعت دیگه امتحان کن.",
+    "send_failed": "ارسال کد ناموفق بود. یه کم دیگه دوباره امتحان کن.",
+    "rate_limited": "تلاش زیاد بود — چند دقیقه‌ی دیگه امتحان کن.",
+    "not_configured": "تأیید هویت الان در دسترس نیست.",
+    "network": "اتصال به سرویس تأیید برقرار نشد. یه دقیقه دیگه دوباره امتحان کن.",
+    "bad_response": "سرویس تأیید پاسخ غیرمنتظره‌ای برگردوند.",
+    "server": "یه مشکلی پیش اومد. دوباره امتحان کن.",
+}
+
+
+def _verify_error_text(is_fa: bool, err: str) -> str:
+    if is_fa:
+        return _VERIFY_ERRORS_FA.get(err, f"خطا ({err}). با پشتیبانی تماس بگیر.")
+    return _VERIFY_ERRORS_EN.get(err, f"Error ({err}). Please contact support.")
+
+
+async def _mark_site_verified(telegram_id: int, email: str | None = None) -> None:
+    async with async_session_maker() as session:
+        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+        user = result.scalar_one_or_none()
+        if user is not None:
+            user.site_verified = True
+            if email:
+                user.site_email = email
+            await session.commit()
+
+
+async def _ensure_site_verified(
+    target: Message, state: FSMContext, plan_key: str, method: str, bot_id: str,
+    telegram_id: int, is_fa: bool,
+) -> bool:
+    """Returns True if the owner is already (or just became) verified and the
+    payment flow should proceed immediately. Returns False if it suspended
+    the flow to collect fields / an OTP code — the pending plan+method is
+    stashed in FSM data (pending_plan_pay) so the eventual code-confirm
+    handler can resume _start_plan_payment_flow itself."""
+    if not website_client.verify_is_configured():
+        return True  # feature not deployed on this install — don't block payment
+
+    user = await _get_user(telegram_id)
+    if user is not None and user.site_verified:
+        return True
+
+    await state.update_data(pending_plan_pay={"plan_key": plan_key, "method": method})
+
+    channel = "sms" if method == "zarinpal" else "email"
+    phone = (user.phone_number or "").strip() if user else ""
+    email = (user.site_email or "").strip() if user else ""
+
+    status = await website_client.check_verification_status(
+        channel, phone=phone or None, email=email or None
+    )
+    if not status.get("ok"):
+        await target.answer(f"❌ {_verify_error_text(is_fa, str(status.get('error', 'network')))}")
+        await state.set_state(None)
+        return False
+
+    if status.get("verified"):
+        await _mark_site_verified(telegram_id, email or None)
+        return True
+
+    await state.update_data(verify_channel=channel)
+
+    if status.get("registered"):
+        # Already has an account for this phone/email — no need to re-collect
+        # name/address, just send it a fresh code.
+        resend = await website_client.resend_verification(
+            channel, phone=phone or None, email=email or None
+        )
+        if not resend.get("ok"):
+            await target.answer(f"❌ {_verify_error_text(is_fa, str(resend.get('error', 'network')))}")
+            await state.set_state(None)
+            return False
+        await state.update_data(verify_phone=phone or None, verify_email=email or None)
+        await state.set_state(LivePlanStates.waiting_for_verify_code)
+        await target.answer(
+            _verify_code_prompt(is_fa, channel), reply_markup=cancel_inline_keyboard(is_fa)
+        )
+        return False
+
+    if channel == "sms":
+        await state.set_state(LivePlanStates.waiting_for_verify_first_name)
+        await target.answer(_verify_intro_iran(is_fa), reply_markup=cancel_inline_keyboard(is_fa))
+    else:
+        await state.set_state(LivePlanStates.waiting_for_verify_email)
+        await target.answer(_verify_intro_intl(is_fa), reply_markup=cancel_inline_keyboard(is_fa))
+    return False
+
+
+def _verify_intro_iran(is_fa: bool) -> str:
+    terms = _terms_line(is_fa)
+    if is_fa:
+        return (
+            "قبل از پرداخت با زرین‌پال، چون اولین بارته، باید حسابت رو تأیید کنیم — همون "
+            "مشخصاتی که تو سایت هم گرفته می‌شه.\n\nاول اسمت رو بفرست." + terms
+        )
+    return (
+        "Before paying with Zarinpal, since this is your first time, we need to verify your "
+        "account — the same details the website collects.\n\nFirst, send your first name." + terms
+    )
+
+
+def _verify_intro_intl(is_fa: bool) -> str:
+    terms = _terms_line(is_fa)
+    if is_fa:
+        return "قبل از پرداخت با TON، ایمیلت رو بفرست تا یه کد تأیید براش بفرستیم." + terms
+    return "Before paying with TON, send your email so we can send a verification code." + terms
+
+
+def _verify_code_prompt(is_fa: bool, channel: str) -> str:
+    via = ("پیامک" if channel == "sms" else "ایمیل") if is_fa else ("SMS" if channel == "sms" else "email")
+    if is_fa:
+        return f"کد ۶ رقمی که با {via} فرستادیم رو بفرست. کد رو نگرفتی؟ /resend رو بزن."
+    return f"Send the 6-digit code we just sent by {via}. Didn't get it? Send /resend."
+
+
+@router.message(LivePlanStates.waiting_for_verify_first_name)
+async def receive_verify_first_name(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    name = (message.text or "").strip()
+    if not name or len(name) > 100:
+        text = "اسمت رو بفرست (حداکثر ۱۰۰ کاراکتر)، یا /cancel." if is_fa else "Send your first name (max 100 characters), or /cancel."
+        await message.answer(text)
+        return
+    await state.update_data(verify_first_name=name)
+    await state.set_state(LivePlanStates.waiting_for_verify_last_name)
+    text = "حالا فامیلت رو بفرست." if is_fa else "Now send your last name."
+    await message.answer(text)
+
+
+@router.message(LivePlanStates.waiting_for_verify_last_name)
+async def receive_verify_last_name(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    name = (message.text or "").strip()
+    if not name or len(name) > 100:
+        text = "فامیلت رو بفرست (حداکثر ۱۰۰ کاراکتر)، یا /cancel." if is_fa else "Send your last name (max 100 characters), or /cancel."
+        await message.answer(text)
+        return
+    await state.update_data(verify_last_name=name)
+    await state.set_state(LivePlanStates.waiting_for_verify_address)
+    text = "حالا آدرست رو بفرست." if is_fa else "Now send your address."
+    await message.answer(text)
+
+
+@router.message(LivePlanStates.waiting_for_verify_address)
+async def receive_verify_address(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    address = (message.text or "").strip()
+    if not address or len(address) > 500:
+        text = "آدرست رو بفرست (حداکثر ۵۰۰ کاراکتر)، یا /cancel." if is_fa else "Send your address (max 500 characters), or /cancel."
+        await message.answer(text)
+        return
+    await state.update_data(verify_address=address)
+    await state.set_state(LivePlanStates.waiting_for_verify_email)
+    text = "در آخر، ایمیلت رو بفرست." if is_fa else "Finally, send your email."
+    await message.answer(text)
+
+
+def _looks_like_email(value: str) -> bool:
+    return bool(value) and 3 <= len(value) <= 254 and "@" in value and "." in value.split("@")[-1]
+
+
+@router.message(LivePlanStates.waiting_for_verify_email)
+async def receive_verify_email(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    email = (message.text or "").strip()
+    if not _looks_like_email(email):
+        text = "این یه ایمیل معتبر به نظر نمی‌رسه. دوباره بفرست، یا /cancel." if is_fa else "That doesn't look like a valid email. Please resend it, or /cancel."
+        await message.answer(text)
+        return
+
+    data = await state.get_data()
+    channel = data.get("verify_channel") or "email"
+    telegram_id = message.from_user.id
+    u = message.from_user
+
+    if channel == "sms":
+        user = await _get_user(telegram_id)
+        phone = (user.phone_number or "").strip() if user else ""
+        result = await website_client.start_verification(
+            "sms",
+            phone=phone,
+            email=email,
+            first_name=data.get("verify_first_name"),
+            last_name=data.get("verify_last_name"),
+            address=data.get("verify_address"),
+            tos=True,
+            telegram_id=telegram_id,
+            telegram_username=u.username,
+            telegram_first_name=u.first_name,
+        )
+    else:
+        phone = None
+        result = await website_client.start_verification(
+            "email",
+            email=email,
+            tos=True,
+            telegram_id=telegram_id,
+            telegram_username=u.username,
+            telegram_first_name=u.first_name,
+        )
+
+    if not result.get("ok"):
+        err = str(result.get("error", "network"))
+        await message.answer(f"❌ {_verify_error_text(is_fa, err)}")
+        if err in ("phone_taken", "email_taken", "not_configured"):
+            await state.set_state(None)
+        # else: stay in this same state so they can resend a corrected email
+        return
+
+    if result.get("already_verified"):
+        await _mark_site_verified(telegram_id, email)
+        await _resume_plan_payment_after_verification(message, state, is_fa)
+        return
+
+    await state.update_data(verify_email=email, verify_phone=phone)
+    await state.set_state(LivePlanStates.waiting_for_verify_code)
+    text = "ممنون! 🙌" if is_fa else "Thanks! 🙌"
+    await message.answer(text)
+    await message.answer(_verify_code_prompt(is_fa, channel), reply_markup=cancel_inline_keyboard(is_fa))
+
+
+async def _resume_plan_payment_after_verification(message: Message, state: FSMContext, is_fa: bool) -> None:
+    data = await state.get_data()
+    pend = data.get("pending_plan_pay") or {}
+    bot_id = data.get("active_bot_id")
+    if not pend.get("plan_key") or not pend.get("method") or not bot_id:
+        await state.clear()
+        text = "یه مشکلی پیش اومد — دوباره /live رو بفرست." if is_fa else "Something went wrong — send /live again."
+        await message.answer(text)
+        return
+    text = "✅ حسابت تأیید شد!" if is_fa else "✅ Your account is verified!"
+    await message.answer(text)
+    await _start_plan_payment_flow(
+        message, state, pend["plan_key"], pend["method"], str(bot_id),
+        telegram_id=message.from_user.id, is_fa=is_fa,
+    )
+
+
+@router.message(LivePlanStates.waiting_for_verify_code, CommandFilter("resend"))
+async def resend_verify_code(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    data = await state.get_data()
+    channel = data.get("verify_channel") or "email"
+    phone = data.get("verify_phone")
+    email = data.get("verify_email")
+    result = await website_client.resend_verification(channel, phone=phone, email=email)
+    if not result.get("ok"):
+        await message.answer(f"❌ {_verify_error_text(is_fa, str(result.get('error', 'network')))}")
+        return
+    if result.get("already_verified"):
+        await _mark_site_verified(message.from_user.id, email)
+        await _resume_plan_payment_after_verification(message, state, is_fa)
+        return
+    text = "یه کد جدید فرستادیم." if is_fa else "Sent a new code."
+    await message.answer(text)
+
+
+@router.message(LivePlanStates.waiting_for_verify_code)
+async def receive_verify_code(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    code = (message.text or "").strip()
+    if not code:
+        text = "کد رو بفرست، یا /cancel بزن." if is_fa else "Please send the code, or /cancel."
+        await message.answer(text)
+        return
+
+    data = await state.get_data()
+    channel = data.get("verify_channel") or "email"
+    phone = data.get("verify_phone")
+    email = data.get("verify_email")
+    result = await website_client.confirm_verification(channel, code, phone=phone, email=email)
+    if not result.get("ok"):
+        await message.answer(f"❌ {_verify_error_text(is_fa, str(result.get('error', 'mismatch')))}")
+        return  # keep the state so they can retry (or /resend, or /cancel)
+
+    await _mark_site_verified(message.from_user.id, email)
+    await _resume_plan_payment_after_verification(message, state, is_fa)
 
 
 @router.message(LivePlanStates.waiting_for_ton_tx_hash)

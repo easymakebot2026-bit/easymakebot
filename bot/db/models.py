@@ -42,6 +42,20 @@ class User(Base):
     # creating a new one can't farm another free 72h window.
     trial_used: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
+    # Identity verification on the marketing website (web/wordpress/wp-
+    # content/mu-plugins/emb-accounts.php + emb-bot-verify.php), required
+    # before a Zarinpal (Iran) or TON (international) /live plan payment —
+    # see bot/handlers/live.py:_ensure_site_verified. A local cache of the
+    # site's `emb_verified` user-meta flag: once true it's never rechecked
+    # over the network again (WordPress never un-verifies someone), so a
+    # returning owner isn't asked to re-verify on every purchase.
+    site_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # The email collected/confirmed during that verification (international
+    # owners only give an email — no phone; Iranian owners' phone is already
+    # in phone_number above). Kept so a later payment can re-check status by
+    # email without asking again. Encrypted like phone_number.
+    site_email: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
