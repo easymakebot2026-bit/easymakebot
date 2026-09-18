@@ -25,6 +25,11 @@ HELP: dict[str, tuple[str, str]] = {
         "لیست ربات‌هاییه که ساختی. روی هرکدوم بزنی وارد محیط ویرایش همون ربات می‌شی.",
         "Your built bots. Tap one to enter its build/edit environment.",
     ),
+    "my_account": (
+        "وضعیت لایو همه‌ی ربات‌هات یه‌جا: فعال (اشتراک پرداختی یا آزمایشی)، منقضی‌شده، یا هنوز فعال‌نشده.",
+        "The live status of every bot you own, at a glance: active (paid or "
+        "trial), expired, or never activated.",
+    ),
     "create_bot": (
         "برای ساخت ربات جدید، اول از @BotFather یه توکن بگیر و همون رو اینجا بفرست.\n"
         "توکن مثل «123456:ABC-...» ئه.",

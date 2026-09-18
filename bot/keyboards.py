@@ -94,13 +94,24 @@ CREATE_BOT_BUTTON_TEXTS = frozenset(
 CREATE_BOT_BUTTON_TEXT = create_bot_button_text(False)
 
 
+def my_account_button_text(is_fa: bool = False) -> str:
+    return "💳 اشتراک من" if is_fa else "💳 My Subscription"
+
+
+MY_ACCOUNT_BUTTON_TEXTS = frozenset(
+    {my_account_button_text(False), my_account_button_text(True)}
+)
+MY_ACCOUNT_BUTTON_TEXT = my_account_button_text(False)
+
+
 def welcome_keyboard(is_fa: bool = False) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [
                 KeyboardButton(text=my_bots_button_text(is_fa)),
                 KeyboardButton(text=create_bot_button_text(is_fa)),
-            ]
+            ],
+            [KeyboardButton(text=my_account_button_text(is_fa))],
         ],
         resize_keyboard=True,
     )

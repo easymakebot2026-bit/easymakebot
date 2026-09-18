@@ -17,6 +17,7 @@ from bot.handlers.cancel import router as cancel_router
 from bot.handlers.create_bot import router as create_bot_router
 from bot.handlers.easybotadmin import router as easybotadmin_router
 from bot.handlers.live import router as live_router
+from bot.handlers.my_account import router as my_account_router
 from bot.handlers.my_bots import router as my_bots_router
 from bot.handlers.start import router as start_router
 from bot.handlers.tools.content_list import router as content_list_router
@@ -135,6 +136,7 @@ async def main() -> None:
     dp.include_router(live_router)
     dp.include_router(start_router)
     dp.include_router(my_bots_router)
+    dp.include_router(my_account_router)
     dp.include_router(tools_menu_router)
 
     await init_db()

@@ -39,7 +39,9 @@ async def _get_user(telegram_id: int) -> User | None:
         return result.scalar_one_or_none()
 
 
-async def _send_live_status(message: Message, bot_id: str, telegram_id: int) -> None:
+async def _send_live_status(
+    message: Message, bot_id: str, telegram_id: int, state: FSMContext | None = None
+) -> None:
     built_bot = await live.get_built_bot(bot_id)
     if built_bot is None:
         # No region known yet at this point (or ever, for a not-found bot) —
@@ -70,9 +72,17 @@ async def _send_live_status(message: Message, bot_id: str, telegram_id: int) -> 
     if region is None:
         await message.answer(
             "One quick question first — where are you based? This decides which payment "
-            "methods you'll see below.",
+            "methods you'll see below. Tap a button, or just share your phone number below "
+            "and we'll figure it out automatically.",
             reply_markup=live_region_keyboard(),
         )
+        if state is not None:
+            await state.set_state(LivePlanStates.waiting_for_region_phone)
+            await message.answer(
+                "📱 Share your phone (fastest — no need to pick manually), or tap Skip. "
+                "Send /cancel to stop.",
+                reply_markup=phone_share_keyboard(),
+            )
         return
 
     methods = platform_billing.available_methods_for_region(region)
@@ -124,7 +134,7 @@ async def cmd_live(message: Message, state: FSMContext) -> None:
         await message.answer(text)
         return
 
-    await _send_live_status(message, bot_id, message.from_user.id)
+    await _send_live_status(message, bot_id, message.from_user.id, state)
 
 
 @router.callback_query(F.data.startswith("live:region:"))
@@ -140,10 +150,82 @@ async def choose_region(callback: CallbackQuery, state: FSMContext) -> None:
     await platform_billing.set_region(user.id, region)
     await callback.answer()
 
+    # Picking a region manually supersedes the auto-detect-via-phone prompt
+    # _send_live_status may have just started (see waiting_for_region_phone).
+    current_state = await state.get_state()
+    if current_state == LivePlanStates.waiting_for_region_phone.state:
+        await state.set_state(None)
+        await callback.message.answer(
+            "ممنون! از دکمه‌ی زیر پرداخت می‌کنی، دیگه لازم نیست شماره رو بفرستی."
+            if is_fa
+            else "Thanks! You'll pay from the button below now — no need to send your phone.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+
     data = await state.get_data()
     bot_id = data.get("active_bot_id")
     if bot_id:
-        await _send_live_status(callback.message, bot_id, callback.from_user.id)
+        await _send_live_status(callback.message, bot_id, callback.from_user.id, state)
+
+
+# --- Auto region detection: share phone instead of picking Iran/international
+# manually (live:region:* above still works any time and wins over this) ---
+
+
+async def _resume_live_after_region_phone(message: Message, state: FSMContext, phone: str) -> None:
+    """Shared tail for both handlers below: save the phone, clear the wait
+    state, and re-render /live — region is re-derived fresh inside
+    _send_live_status from the phone we just saved
+    (platform_billing.resolve_region), so this renders the right payment
+    methods without asking anything else."""
+    await _save_user_phone(message.from_user.id, phone)
+    await state.set_state(None)
+    is_fa = await owner_prefers_persian(message.from_user)
+
+    data = await state.get_data()
+    bot_id = data.get("active_bot_id")
+    if not bot_id:
+        text = "یه مشکلی پیش اومد — دوباره /live رو بفرست." if is_fa else "Something went wrong — send /live again."
+        await message.answer(text, reply_markup=ReplyKeyboardRemove())
+        return
+
+    await message.answer("ممنون! 🙌" if is_fa else "Thanks! 🙌", reply_markup=ReplyKeyboardRemove())
+    await _send_live_status(message, bot_id, message.from_user.id, state)
+
+
+@router.message(LivePlanStates.waiting_for_region_phone, F.contact)
+async def receive_region_phone_contact(message: Message, state: FSMContext) -> None:
+    phone = message.contact.phone_number
+    if not phone.startswith("+"):
+        phone = f"+{phone}"
+    await _resume_live_after_region_phone(message, state, phone)
+
+
+@router.message(LivePlanStates.waiting_for_region_phone, F.text)
+async def receive_region_phone_text(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    if (message.text or "").strip() == SKIP_BUTTON_TEXT:
+        await state.set_state(None)
+        text = (
+            "باشه — از دکمه‌های «ایران» / «خارج از ایران» بالا انتخاب کن."
+            if is_fa
+            else "No problem — use the Iran / Outside Iran buttons above."
+        )
+        await message.answer(text, reply_markup=ReplyKeyboardRemove())
+        return
+
+    phone = normalize_typed_phone(message.text)
+    if phone is None:
+        text = (
+            "برای تشخیص خودکار، شماره رو با دکمه بفرست یا با کد کشور تایپ کن (مثلاً +989121234567) — "
+            "یا از دکمه‌های ایران/خارج از ایران بالا انتخاب کن."
+            if is_fa
+            else "To auto-detect, share your phone with the button or type it with the country "
+            "code (e.g. +989121234567) — or use the Iran / Outside Iran buttons above."
+        )
+        await message.answer(text, reply_markup=phone_share_keyboard())
+        return
+    await _resume_live_after_region_phone(message, state, phone)
 
 
 @router.callback_query(F.data == "live:trial")

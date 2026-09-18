@@ -137,4 +137,10 @@ class LivePlanStates(StatesGroup):
     # accountability — see bot/handlers/live.py). The pending code / plan+method
     # is stashed in FSM data.
     waiting_for_activation_code_phone = State()
+    # Phone requested right when /live is opened and no region is known yet
+    # (no phone on file, no self-reported region) — lets us auto-detect
+    # Iran vs. international from the real number's country code instead of
+    # asking the owner to pick manually. Manual pick (live:region:*) still
+    # works at any time and clears this state.
+    waiting_for_region_phone = State()
     waiting_for_plan_payment_phone = State()
