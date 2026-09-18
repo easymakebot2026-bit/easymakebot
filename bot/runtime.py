@@ -228,6 +228,7 @@ _COMMAND_DESCRIPTIONS = {
     "content": "Browse content",
     "cart": "View your cart",
     "orders": "View your orders",
+    "account": "Your account",
     "help": "Show help",
     "stop": "Stop broadcast messages",
 }
@@ -281,6 +282,15 @@ async def sync_bot_commands(bot_id: uuid.UUID) -> None:
         # manually. A flow/legacy "/orders" trigger the owner defines
         # themselves still wins (setdefault), same as /content and /cart.
         kinds.setdefault("/orders", "orders")
+
+    # Built-in "My Account" command — unlike /content, /cart and /orders
+    # (auto-offered whenever there's something to browse/buy), this one is
+    # opt-in per bot: only shown once the owner has turned it on for their
+    # own bot (bot/handlers/tools/shop.py:toggle_my_account). A custom
+    # "/account" the owner defines themselves still wins (setdefault).
+    account_settings = await shop.get_shop_settings(bot_id)
+    if account_settings and account_settings.my_account_enabled:
+        kinds.setdefault("/account", "account")
 
     # Built-in help command — always offered (unlike /content, /cart and
     # /orders, which only make sense once there's something to browse/buy),
@@ -1637,6 +1647,49 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
     async def handle_orders_command(message: Message) -> None:
         is_fa = await _end_user_prefers_persian(message.from_user)
         await send_order_status(bot_id, message, is_fa)
+
+    @dp.message(CommandFilter("account"))
+    async def handle_account_command(message: Message) -> None:
+        """"My Account" — display-only membership date, order count, and
+        lifetime spend (see bot/shop.py:get_account_summary for what
+        "credit" means here — NOT a real wallet balance). Opt-in per bot
+        (ShopSettings.my_account_enabled) even though sync_bot_commands
+        already keeps the "/" menu entry hidden when it's off — this handler
+        re-checks the same flag itself, since a menu entry is only ever a
+        suggestion and someone could still type /account by hand."""
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        settings = await shop.get_shop_settings(bot_id)
+        if not (settings and settings.my_account_enabled):
+            return
+        summary = await shop.get_account_summary(bot_id, message.from_user.id)
+        if summary is None:
+            text = "اول باید /start رو بزنی." if is_fa else "Send /start first."
+            await message.answer(text)
+            return
+
+        spend_lines = []
+        if summary["toman_total"]:
+            spend_lines.append(pricing.format_price(summary["toman_total"]))
+        if summary["usd_total"]:
+            spend_lines.append(pricing.format_price(summary["usd_total"], currency="USD"))
+        spend_text = " + ".join(spend_lines) if spend_lines else ("۰ تومان" if is_fa else "0 Toman")
+
+        member_since = f"{summary['member_since']:%Y-%m-%d}"
+        if is_fa:
+            text = (
+                f"👤 حساب من\n\n"
+                f"📅 تاریخ عضویت: {member_since}\n"
+                f"📦 تعداد سفارش‌ها: {summary['order_count']}\n"
+                f"💳 مجموع خریدهای موفق: {spend_text}"
+            )
+        else:
+            text = (
+                f"👤 My Account\n\n"
+                f"📅 Member since: {member_since}\n"
+                f"📦 Orders: {summary['order_count']}\n"
+                f"💳 Total spent: {spend_text}"
+            )
+        await message.answer(text)
 
     @dp.message(CommandFilter("stop"))
     async def handle_stop_broadcasts(message: Message) -> None:

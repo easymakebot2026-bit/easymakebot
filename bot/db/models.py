@@ -589,6 +589,12 @@ class ShopSettings(Base):
     # payment already in flight.
     tax_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
+    # Buyer-facing "My Account" screen (bot/shop.py:get_account_summary,
+    # bot/runtime.py's /account handler) — display-only (membership date,
+    # order count, lifetime spend), off by default; each bot owner turns it
+    # on for their own bot (bot/handlers/tools/shop.py:toggle_my_account).
+    my_account_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
     bot: Mapped["BuiltBot"] = relationship(back_populates="shop_settings")
 
 

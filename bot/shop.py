@@ -2355,3 +2355,73 @@ async def list_buyer_orders(bot_id: uuid.UUID, buyer_telegram_id: int, limit: in
 
     entries.sort(key=lambda e: e["date"], reverse=True)
     return entries[:limit]
+
+
+async def get_account_summary(bot_id: uuid.UUID | str, telegram_id: int) -> dict | None:
+    """Buyer-facing "My Account" data for one subscriber of `bot_id` — gated
+    behind ShopSettings.my_account_enabled (bot/runtime.py's /account handler
+    checks that before ever calling this). Returns None if this person has
+    never /start'd the bot (no BotSubscriber row).
+
+    "Credit" here is NOT a real wallet/store-credit balance — this codebase
+    has no such thing. It's a display-only lifetime total of this buyer's
+    successful (paid/fulfilled) purchases, kept in two separate currency
+    buckets (Toman vs USD) rather than one combined number: a Stripe order is
+    USD while every other payment method (Zarinpal, card-to-card, TON/crypto)
+    is Toman, and adding those together would silently mix currencies — the
+    same mistake bot/admin_panel.py's platform-wide revenue stats already had
+    to be fixed for once; see its "Toman/USD currency-mixing" comment.
+
+    Counts a checkout (the cart's combined-payment flow) as ONE order, same
+    as list_buyer_orders above and the /orders screen — not one per line
+    item — and, like that function, uses two separate queries (Order rows
+    with no checkout_id, plus Checkout rows) rather than summing
+    Order.tax_amount across every row, because a checkout's VAT is only ever
+    snapshotted once on the Checkout itself (see create_checkout above) —
+    every Order fanned out from it keeps tax_amount unset, so tax on a
+    multi-item cart purchase would otherwise be undercounted here."""
+    async with async_session_maker() as session:
+        sub_result = await session.execute(
+            select(BotSubscriber).where(
+                BotSubscriber.bot_id == bot_id, BotSubscriber.telegram_id == telegram_id
+            )
+        )
+        subscriber = sub_result.scalar_one_or_none()
+        if subscriber is None:
+            return None
+
+        direct_orders = list(
+            (
+                await session.execute(
+                    select(Order).where(
+                        Order.bot_id == bot_id,
+                        Order.buyer_telegram_id == telegram_id,
+                        Order.checkout_id.is_(None),
+                        Order.status.in_(("paid", "fulfilled")),
+                    )
+                )
+            ).scalars()
+        )
+        paid_checkouts = list(
+            (
+                await session.execute(
+                    select(Checkout).where(
+                        Checkout.bot_id == bot_id,
+                        Checkout.buyer_telegram_id == telegram_id,
+                        Checkout.status == "paid",
+                    )
+                )
+            ).scalars()
+        )
+
+    toman_total = sum(order_total(o) for o in direct_orders if o.payment_method != "stripe")
+    toman_total += sum(checkout_total(c) for c in paid_checkouts if c.payment_method != "stripe")
+    usd_total = sum(order_total(o) for o in direct_orders if o.payment_method == "stripe")
+    usd_total += sum(checkout_total(c) for c in paid_checkouts if c.payment_method == "stripe")
+
+    return {
+        "member_since": subscriber.created_at,
+        "order_count": len(direct_orders) + len(paid_checkouts),
+        "toman_total": toman_total,
+        "usd_total": usd_total,
+    }

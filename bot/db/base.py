@@ -320,3 +320,12 @@ async def init_db() -> None:
         await conn.execute(
             text("ALTER TABLE cart_items ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1")
         )
+
+        # Per-bot toggle for the buyer-facing "My Account" screen (bot/shop.py:
+        # get_account_summary, bot/runtime.py's /account handler) — off by
+        # default, each bot owner turns it on for their own bot from the Shop
+        # tool's main menu (bot/handlers/tools/shop.py:toggle_my_account).
+        await conn.execute(
+            text("ALTER TABLE shop_settings ADD COLUMN IF NOT EXISTS "
+                 "my_account_enabled BOOLEAN NOT NULL DEFAULT false")
+        )
