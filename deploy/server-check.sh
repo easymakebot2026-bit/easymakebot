@@ -22,14 +22,18 @@ export GIT_TERMINAL_PROMPT=0
 # shellcheck source=deploy/audit-common.sh
 . "$DEPLOY_DIR/audit-common.sh"
 
-compose() { $SUDO docker compose -f "$COMPOSE_FILE" "$@"; }
+# --env-file is required: the compose file's ${POSTGRES_PASSWORD:?} /
+# ${APP_DOMAIN:?} substitutions are resolved from it (see the header of
+# docker-compose.bot.yml) — without it every compose command fails.
+compose() { $SUDO docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"; }
 
 env_value() {  # reads one non-secret key from .env.bot without printing the file
   [ -f "$ENV_FILE" ] && grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d '"'"'"
 }
 
-db_service() { compose ps --services 2>/dev/null | grep -m1 -E 'db|postgres'; }
-bot_service() { compose ps --services 2>/dev/null | grep -m1 -vE 'db|postgres|caddy'; }
+# Service names from docker-compose.bot.yml.
+db_service() { echo bot-db; }
+bot_service() { echo bot; }
 
 backup_db() {
   section "Database backup"
@@ -57,6 +61,7 @@ do_deploy() {
     git status --short | sed 's/^/    /'
     exit 1
   fi
+  if [ ! -f "$ENV_FILE" ]; then echo "  [ERROR] $ENV_FILE not found — nothing was changed"; exit 1; fi
   backup_db || exit 1
   local before
   before=$(git rev-parse --short HEAD)
@@ -115,7 +120,14 @@ audit_bot() {
   $SUDO crontab -l 2>/dev/null | grep -q pg_dump || crontab -l 2>/dev/null | grep -q pg_dump \
     || warn "No cron job running pg_dump was found"
 
-  audit_env_perms "$ENV_FILE" "$REPO_DIR/.env"
+  audit_env_perms "$ENV_FILE" "$DEPLOY_DIR/.env" "$REPO_DIR/.env"
+  if [ -f "$ENV_FILE" ]; then
+    section "Bot configuration (values hidden — only whether each is set)"
+    for k in BOT_TOKEN PLATFORM_ADMIN_ID ENCRYPTION_KEY POSTGRES_PASSWORD APP_DOMAIN WEBAPP_URL WEBSITE_URL WEBSITE_ACTIVATION_KEY; do
+      if [ -n "$(env_value "$k")" ]; then note "$k: set"; else warn "$k: NOT set"; fi
+    done
+    case "$(env_value PLATFORM_ONBOT_ZARINPAL)" in true|1|yes|on) warn "PLATFORM_ONBOT_ZARINPAL is on — only correct if this server has an Iranian IP";; esac
+  fi
   local domain
   domain=$(env_value APP_DOMAIN)
   if [ -n "$domain" ]; then

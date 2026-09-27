@@ -41,7 +41,9 @@ detect_compose_files() {
 COMPOSE_ARGS="$(detect_compose_files)"
 # shellcheck disable=SC2086
 compose() { (cd "$WEB_DIR" && $SUDO docker compose $COMPOSE_ARGS "$@"); }
-php_service() { compose ps --services 2>/dev/null | grep -vE 'wpcli|db|mysql|mariadb|nginx|caddy|backup|redis' | grep -m1 -E 'wordpress|php|wp|app'; }
+# Service names from docker-compose.yml / .prod.yml (wpcli is a one-shot
+# service behind the "cli" profile; `run` starts it on demand).
+php_service() { echo wordpress; }
 wp() { compose run --rm -T wpcli wp "$@" 2>/dev/null; }
 
 backup_db() {
@@ -132,25 +134,45 @@ audit_wordpress() {
   wp plugin verify-checksums --all >/dev/null || warn "Some plugin files don't match wordpress.org checksums (normal for premium plugins; investigate others)"
   note "Administrators: $(wp user list --role=administrator --format=count)"
   note "Open registration (users_can_register): $(wp option get users_can_register)"
-  [ "$(wp config get WP_DEBUG 2>/dev/null)" = "1" ] && warn "WP_DEBUG is on in production"
-  [ "$(wp config get DISALLOW_FILE_EDIT 2>/dev/null)" = "1" ] || warn "DISALLOW_FILE_EDIT is not set — admins can edit PHP from the dashboard"
+  # These constants come from WORDPRESS_CONFIG_EXTRA (evaluated at runtime by
+  # the image), so `wp config get` can't see them — ask PHP instead.
+  [ "$(wp eval 'echo (defined("WP_DEBUG") && WP_DEBUG) ? 1 : 0;')" = "1" ] && warn "WP_DEBUG is on in production"
+  [ "$(wp eval 'echo (defined("DISALLOW_FILE_EDIT") && DISALLOW_FILE_EDIT) ? 1 : 0;')" = "1" ] \
+    || warn "DISALLOW_FILE_EDIT is not set — admins can edit PHP from the dashboard"
+  [ "$(wp eval 'echo (defined("FORCE_SSL_ADMIN") && FORCE_SSL_ADMIN) ? 1 : 0;')" = "1" ] \
+    || warn "FORCE_SSL_ADMIN is off — set WP_FORCE_SSL_ADMIN=true in web/.env"
+  [ "$(wp eval 'echo str_starts_with((string) AUTH_KEY, "dev-only") ? 1 : 0;')" = "1" ] \
+    && warn "WordPress salts are still the dev placeholders — set WP_AUTH_KEY etc. in web/.env"
   note "Activation codes: $(wp db query "SELECT CONCAT(status, '=', COUNT(*)) FROM $(wp db prefix)emb_activation_codes GROUP BY status" --skip-column-names 2>/dev/null | tr '\n' ' ')"
   note "TON orders waiting (on-hold): $(wp eval 'echo count( wc_get_orders( array( "payment_method" => "emb_ton", "status" => "on-hold", "limit" => -1, "return" => "ids" ) ) );')"
-  local key
-  key=$(wp config get EMB_ACTIVATION_KEY 2>/dev/null || true)
-  case "$key" in ""|change-me*) warn "EMB_ACTIVATION_KEY is empty or still the placeholder";; esac
+  # Checked inside PHP so the key itself is never printed.
+  [ "$(wp eval 'echo function_exists("emb_actcodes_api_key") && ($k = emb_actcodes_api_key()) !== "" && strpos($k, "change-me") !== 0 && strlen($k) >= 24 ? 1 : 0;')" = "1" ] \
+    || warn "EMB_ACTIVATION_KEY is empty, still the placeholder, or shorter than 24 characters"
 
   local wpc
   wpc=$(compose ps -q "$(php_service)" 2>/dev/null)
   [ -n "$wpc" ] && audit_logs "$wpc" 500
 
   section "Backups"
-  local newest
-  newest=$(ls -t "$BACKUP_DIR"/*.sql.gz "$WEB_DIR"/backups/* 2>/dev/null | head -1)
-  if [ -n "$newest" ]; then
-    note "Newest: $newest ($(( ( $(date +%s) - $(stat -c %Y "$newest") ) / 86400 )) days old)"
+  # Nightly job: the `backup` service (docker-compose.prod.yml) runs
+  # scripts/backup.sh at 03:00 — dump + uploads, pushed off-box with rclone,
+  # last 3 runs kept locally in web/backups/.
+  if [ -n "$(compose ps -q backup 2>/dev/null)" ]; then
+    local last
+    last=$(compose logs --no-log-prefix backup 2>/dev/null | grep -E 'backup [0-9-]+ (done|starting)' | tail -1)
+    note "Last backup job log line: ${last:-none yet}"
+    compose logs --no-log-prefix --tail 200 backup 2>/dev/null | grep -iE 'error|failed|denied' | tail -5 | sed 's/^/    [WARN] /'
   else
-    warn "No backup files found here — check that the nightly backup job is running and copies off-site"
+    warn "The backup service isn't running — nightly off-site backups are not happening"
+  fi
+  local newest
+  newest=$(ls -td "$WEB_DIR"/backups/*/ "$BACKUP_DIR"/*.sql.gz 2>/dev/null | head -1)
+  if [ -n "$newest" ]; then
+    local age=$(( ( $(date +%s) - $(stat -c %Y "$newest") ) / 86400 ))
+    note "Newest local copy: $newest ($age days old)"
+    if [ "$age" -gt 2 ]; then warn "Newest local backup is $age days old — the nightly job may be failing"; fi
+  else
+    warn "No local backup copies found in web/backups/"
   fi
 
   audit_env_perms "$WEB_DIR/.env"

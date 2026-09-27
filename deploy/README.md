@@ -83,8 +83,8 @@ unless you have them.
 ## 3. Start it
 
 ```bash
-docker compose -f docker-compose.bot.yml up -d --build
-docker compose -f docker-compose.bot.yml logs -f bot
+docker compose --env-file .env.bot -f docker-compose.bot.yml up -d --build
+docker compose --env-file .env.bot -f docker-compose.bot.yml logs -f bot
 ```
 `init_db()` creates + patches the schema on first boot — no manual migration.
 Caddy fetches the `app.easymakebot.com` cert on the first HTTPS hit.
@@ -126,7 +126,7 @@ curl -s "https://easymakebot.com/wp-json/emb/v1/check?code=EMB-TEST-TEST" \
 5. Buy on the site (browser, VPN off), get an `EMB-…` code, paste it in
    **Activate with a code** → bot logs show a `redeem` call → confirm:
    ```bash
-   docker compose -f docker-compose.bot.yml exec bot-db \
+   docker compose --env-file .env.bot -f docker-compose.bot.yml exec bot-db \
      psql -U easymakebot -c "select bot_username, live_until from built_bots;"
    ```
 
@@ -136,18 +136,18 @@ curl -s "https://easymakebot.com/wp-json/emb/v1/check?code=EMB-TEST-TEST" \
 
 | Task | Command (in `/opt/easymakebot/deploy`) |
 |---|---|
-| Update after `git pull` | `docker compose -f docker-compose.bot.yml up -d --build` |
-| Logs | `docker compose -f docker-compose.bot.yml logs -f bot` |
-| Restart bot only | `docker compose -f docker-compose.bot.yml restart bot` |
-| DB shell | `docker compose -f docker-compose.bot.yml exec bot-db psql -U easymakebot` |
-| DB backup | `docker compose -f docker-compose.bot.yml exec -T bot-db pg_dump -U easymakebot easymakebot | gzip > ~/emb-bot-$(date +%F).sql.gz` |
+| Update after `git pull` | `docker compose --env-file .env.bot -f docker-compose.bot.yml up -d --build` |
+| Logs | `docker compose --env-file .env.bot -f docker-compose.bot.yml logs -f bot` |
+| Restart bot only | `docker compose --env-file .env.bot -f docker-compose.bot.yml restart bot` |
+| DB shell | `docker compose --env-file .env.bot -f docker-compose.bot.yml exec bot-db psql -U easymakebot` |
+| DB backup | `docker compose --env-file .env.bot -f docker-compose.bot.yml exec -T bot-db pg_dump -U easymakebot easymakebot | gzip > ~/emb-bot-$(date +%F).sql.gz` |
 
 **Back up `ENCRYPTION_KEY` and the `bot_db_data` volume together.**
 
 ### Rollback
 ```bash
 git -C /opt/easymakebot checkout <previous-tag>
-docker compose -f docker-compose.bot.yml up -d --build
+docker compose --env-file .env.bot -f docker-compose.bot.yml up -d --build
 ```
 Schema is additive-only (`ADD COLUMN IF NOT EXISTS`), so an older image runs
 fine against a newer DB.
