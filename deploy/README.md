@@ -166,3 +166,26 @@ the origin doesn't see (and rate-limit) a single Cloudflare IP.
 `deploy/systemd/easymakebot-bot.service` runs the bot from a virtualenv under
 systemd (needs a local Postgres, a built `webapp/dist`, and your own TLS proxy
 for `APP_DOMAIN`). Docker is recommended.
+
+---
+
+## Deploy + health/security check scripts
+
+Both servers have one script each. Run them from the repo checkout on that
+server. With no argument they only **read** (safe anytime); `deploy` first
+takes a database backup (to `~/emb-backups/`, aborts if it fails), then pulls
+and restarts. The output is redacted (no tokens, keys or e-mails), so it can
+be pasted for review.
+
+| Server | Audit only | Deploy + audit |
+|---|---|---|
+| Bot (Germany) | `./deploy/server-check.sh` | `./deploy/server-check.sh deploy` |
+| Website (Iran) | `./web/scripts/server-check.sh` | `./web/scripts/server-check.sh deploy` |
+
+The audit covers: OS updates and pending reboot, disk/memory, open ports and
+firewall (including Docker-published ports that bypass ufw), fail2ban, SSH
+settings and failed logins, container status/restarts/recent errors, backups,
+`.env` file permissions, TLS expiry, security headers and publicly exposed
+files. The website audit also runs WordPress checks (core/plugin checksums,
+updates, admins, debug flags) and re-verifies every TON/USDT order already
+completed against the official USDT contract.
