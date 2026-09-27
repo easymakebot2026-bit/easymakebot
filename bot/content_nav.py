@@ -9,10 +9,10 @@ the built-in /content command, and item/back navigation (both in bot/runtime.py)
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 
 from bot.db.base import async_session_maker
-from bot.db.models import ContentItem
+from bot.db.models import ContentItem, ContentUnlock
 
 LIST_LIMIT = 40  # Telegram's practical inline-keyboard limit — used as-is by
 # get_all_items (the owner's flat parent-picker list) and as get_children's
@@ -202,3 +202,18 @@ async def reparent_item(bot_id: uuid.UUID, item_id: int, new_parent_id: int | No
         item.parent_id = new_parent_id
         await session.commit()
     return True
+
+
+async def delete_item_rows(session, item: ContentItem) -> None:
+    """Deletes one content item inside the caller's session/transaction.
+    ContentUnlock rows (free-preview or paid unlocks of this item) hold a FK
+    to it with no cascade, so an item anyone had ever unlocked used to fail
+    to delete with a FK violation — they're removed first. Any direct
+    children are moved up to this item's own parent rather than blocking
+    the delete (the interactive tools refuse to delete a folder with
+    children before calling this; the bulk importer relies on this)."""
+    await session.execute(delete(ContentUnlock).where(ContentUnlock.content_item_id == item.id))
+    await session.execute(
+        update(ContentItem).where(ContentItem.parent_id == item.id).values(parent_id=item.parent_id)
+    )
+    await session.delete(item)

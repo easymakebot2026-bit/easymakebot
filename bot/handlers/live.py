@@ -663,6 +663,9 @@ async def approve_ton_payment(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("live:ton_reject:"), _is_platform_admin)
 async def reject_ton_payment(callback: CallbackQuery) -> None:
     payment_id = int(callback.data.split(":")[-1])
-    await platform_billing.reject_ton_live_payment(payment_id)
-    await callback.answer("Rejected")
+    rejected = await platform_billing.reject_ton_live_payment(payment_id)
+    if rejected:
+        await callback.answer("Rejected")
+    else:
+        await callback.answer("This payment was already approved or rejected.", show_alert=True)
     await callback.message.edit_reply_markup(reply_markup=None)

@@ -14,10 +14,31 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from openpyxl import Workbook
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 
 from bot.db.base import async_session_maker
-from bot.db.models import BotSubscriber, BuiltBot, LivePayment, Order, Product, User
+from bot.db.models import (
+    BotPost,
+    BotSubscriber,
+    BroadcastLog,
+    BuiltBot,
+    CartItem,
+    Checkout,
+    Command,
+    ContentItem,
+    ContentUnlock,
+    JoinChannel,
+    LivePayment,
+    Order,
+    PostComment,
+    PostLike,
+    PriceCampaign,
+    Product,
+    ProductDeliveryItem,
+    RedeemedActivationCode,
+    ShopSettings,
+    User,
+)
 from bot.platform_settings import bots_enabled as _bots_enabled
 from bot.platform_settings import set_bots_enabled as _set_bots_enabled
 from bot.runtime import start_built_bot, stop_built_bot
@@ -269,16 +290,50 @@ async def rename_bot(bot_id: uuid.UUID | str, new_display_name: str) -> BuiltBot
 
 
 async def delete_bot(bot_id: uuid.UUID | str) -> bool:
-    """Cascades — see bot/db/models.py: BuiltBot's relationships are all
-    cascade="all, delete-orphan" (commands, content_items, products, orders,
-    shop_settings, join_channels). Callers must confirm hard before this."""
+    """Deletes the bot and every row that belongs to it. Done as explicit,
+    dependency-ordered bulk deletes rather than relying on ORM cascades:
+    several tables (subscribers, carts, checkouts, live payments, ...) have
+    a FK to built_bots with no cascade at all, and any one of them left
+    behind made the final DELETE fail with a FK violation — i.e. a bot
+    with even a single subscriber could never be deleted. Callers must
+    confirm hard before this."""
     stop_built_bot(bot_id)  # accepts either a UUID or its string form
     async with async_session_maker() as session:
-        result = await session.execute(select(BuiltBot).where(BuiltBot.id == bot_id))
-        built_bot = result.scalar_one_or_none()
-        if built_bot is None:
+        result = await session.execute(select(BuiltBot.id).where(BuiltBot.id == bot_id))
+        bid = result.scalar_one_or_none()
+        if bid is None:
             return False
-        await session.delete(built_bot)
+
+        product_ids = select(Product.id).where(Product.bot_id == bid)
+        post_ids = select(BotPost.id).where(BotPost.bot_id == bid)
+
+        await session.execute(delete(ProductDeliveryItem).where(ProductDeliveryItem.product_id.in_(product_ids)))
+        await session.execute(delete(PostLike).where(PostLike.post_id.in_(post_ids)))
+        await session.execute(delete(PostComment).where(PostComment.post_id.in_(post_ids)))
+        await session.execute(delete(ContentUnlock).where(ContentUnlock.bot_id == bid))
+        # content_items reference each other (parent_id) and products
+        # (product_id) — detach first so they can go in one statement.
+        await session.execute(
+            update(ContentItem).where(ContentItem.bot_id == bid).values(parent_id=None, product_id=None)
+        )
+        await session.execute(delete(ContentItem).where(ContentItem.bot_id == bid))
+        await session.execute(delete(CartItem).where(CartItem.bot_id == bid))
+        await session.execute(delete(Order).where(Order.bot_id == bid))
+        await session.execute(delete(Checkout).where(Checkout.bot_id == bid))
+        for model in (
+            Product,
+            ShopSettings,
+            PriceCampaign,
+            BotSubscriber,
+            BotPost,
+            Command,
+            JoinChannel,
+            LivePayment,
+            BroadcastLog,
+            RedeemedActivationCode,
+        ):
+            await session.execute(delete(model).where(model.bot_id == bid))
+        await session.execute(delete(BuiltBot).where(BuiltBot.id == bid))
         await session.commit()
         return True
 

@@ -44,14 +44,20 @@ function AddButtonForm({ onAdd, onCancel }) {
       setError('Button URL must start with http:// or https://.')
       return
     }
-    if (form.type === 'jump' && !form.command.trim().startsWith('/')) {
-      setError('Target command must start with /.')
+    if (form.type === 'url' && /\s/.test(form.url.trim())) {
+      setError('Button URL can\'t contain spaces.')
+      return
+    }
+    if (form.type === 'jump' && !/^\/[a-z0-9_]{1,32}$/.test(form.command.trim().toLowerCase())) {
+      setError('Target command must be / plus lowercase English letters, digits or _ (max 32).')
       return
     }
     onAdd({
       type: form.type,
       text: form.text.trim(),
-      ...(form.type === 'url' ? { url: form.url.trim() } : { command: form.command.trim() }),
+      ...(form.type === 'url'
+        ? { url: form.url.trim() }
+        : { command: form.command.trim().toLowerCase() }),
     })
   }
 
@@ -162,7 +168,25 @@ export default function MessageComposer({ initialMessages, onClose, onSave }) {
   const removeBlock = (index) => setBlocks((bs) => bs.filter((_, i) => i !== index))
   const addBlock = () => setBlocks((bs) => [...bs, EMPTY_BLOCK])
 
-  const save = () => onSave(blocks.filter((b) => (b.text || '').trim() || b.media_type))
+  const [error, setError] = useState('')
+
+  const save = () => {
+    const kept = blocks.filter((b) => (b.text || '').trim() || b.media_type)
+    // Telegram's limits: 1024 characters for a media caption, 4096 for text.
+    for (const [i, b] of kept.entries()) {
+      const hasMedia = b.media_type && (b.media_url || b.media_file_id)
+      const limit = hasMedia ? 1024 : 4096
+      if ((b.text || '').trim().length > limit) {
+        setError(`Message ${i + 1} is too long (max ${limit} characters${hasMedia ? ' for a caption' : ''}).`)
+        return
+      }
+      if (b.media_url && !/^https?:\/\/\S+$/.test(b.media_url.trim())) {
+        setError(`Message ${i + 1}: the media link must start with http:// or https:// and contain no spaces.`)
+        return
+      }
+    }
+    onSave(kept)
+  }
 
   return (
     <div className="cm-overlay">
@@ -190,6 +214,7 @@ export default function MessageComposer({ initialMessages, onClose, onSave }) {
           </button>
         </div>
 
+        {error && <div className="cm-error">{error}</div>}
         <div className="cm-form-actions">
           <button type="button" className="cm-button cm-button-primary" onClick={save}>
             Save

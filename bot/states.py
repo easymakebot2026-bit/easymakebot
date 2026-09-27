@@ -50,6 +50,8 @@ class ShopStates(StatesGroup):
     waiting_for_card_number = State()
     waiting_for_card_holder = State()
     waiting_for_stripe_key = State()
+    # Toman per 1 USD, asked right after the key — see ShopSettings.stripe_toman_per_usd.
+    waiting_for_stripe_rate = State()
     waiting_for_crypto_address = State()
     waiting_for_crypto_label = State()
     waiting_for_ton_address = State()

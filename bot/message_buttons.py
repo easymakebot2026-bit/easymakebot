@@ -20,15 +20,37 @@ error is exactly what's wanted.
 
 from __future__ import annotations
 
+import re
+
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 MAX_BUTTONS = 8
 MAX_BUTTON_TEXT = 64
 MAX_CALLBACK_DATA_BYTES = 64
 
+# Telegram's own rule for a bot command (BotCommand.command): 1-32 of
+# lowercase English letters, digits and underscores. A single name outside
+# it makes setMyCommands reject the bot's ENTIRE "/" menu, and a name with
+# spaces/other scripts can't be sent as a command anyway.
+COMMAND_NAME_RE = re.compile(r"^/[a-z0-9_]{1,32}$")
 
-def _valid_url(url: str) -> bool:
-    return bool(url) and (url.startswith("http://") or url.startswith("https://")) and " " not in url
+
+def is_valid_command_name(name: str | None) -> bool:
+    return bool(name) and COMMAND_NAME_RE.match(name) is not None
+
+
+def is_valid_button_url(url: str | None) -> bool:
+    """An http(s) link Telegram will accept as a URL button. One bad URL
+    button makes Telegram reject the whole message it's attached to."""
+    url = (url or "").strip()
+    return (
+        (url.startswith("http://") or url.startswith("https://"))
+        and len(url) > len("https://")
+        and not any(ch.isspace() for ch in url)
+    )
+
+
+_valid_url = is_valid_button_url
 
 
 def validate_buttons(buttons: list[dict] | None, is_fa: bool = False) -> str | None:
@@ -58,12 +80,14 @@ def validate_buttons(buttons: list[dict] | None, is_fa: bool = False) -> str | N
                     else "Button URL is invalid (must start with http:// or https://)."
                 )
         elif kind == "jump":
-            command = (b.get("command") or "").strip()
-            if not command.startswith("/"):
+            command = (b.get("command") or "").strip().lower()
+            if not is_valid_command_name(command):
                 return (
-                    "اسم دستور مقصد باید با / شروع بشه."
+                    "اسم دستور مقصد باید با / شروع بشه و فقط حروف کوچک انگلیسی، عدد و _ داشته باشه "
+                    "(حداکثر ۳۲ کاراکتر)، مثلاً /menu."
                     if is_fa
-                    else "The target command must start with /."
+                    else "The target command must start with / and use only lowercase English letters, "
+                    "digits and _ (max 32 characters), e.g. /menu."
                 )
         else:
             return "نوع دکمه نامعتبره." if is_fa else "Invalid button type."
@@ -76,8 +100,12 @@ def build_inline_keyboard(buttons: list[dict] | None) -> InlineKeyboardMarkup | 
     Builder (no validation there) or from before a rule existed."""
     if not buttons:
         return None
+    if not isinstance(buttons, list):
+        return None
     rows: list[list[InlineKeyboardButton]] = []
     for b in buttons[:MAX_BUTTONS]:
+        if not isinstance(b, dict):
+            continue
         text = (b.get("text") or "").strip()[:MAX_BUTTON_TEXT]
         if not text:
             continue
@@ -88,8 +116,8 @@ def build_inline_keyboard(buttons: list[dict] | None) -> InlineKeyboardMarkup | 
                 continue
             rows.append([InlineKeyboardButton(text=text, url=url)])
         elif kind == "jump":
-            command = (b.get("command") or "").strip()
-            if not command.startswith("/"):
+            command = (b.get("command") or "").strip().lower()
+            if not is_valid_command_name(command):
                 continue
             callback_data = f"cmdjump:{command}"
             if len(callback_data.encode("utf-8")) > MAX_CALLBACK_DATA_BYTES:

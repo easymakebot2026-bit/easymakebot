@@ -7,7 +7,7 @@ from typing import Any
 from aiogram import Bot, Dispatcher, F
 from aiogram.exceptions import TelegramRetryAfter
 from aiogram.filters import Command as CommandFilter
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     BotCommand,
@@ -33,11 +33,12 @@ from bot.content_nav import (
     has_any_content,
 )
 from bot.keyboards import post_engagement_keyboard
-from bot.list_render import send_item_list
+from bot.message_buttons import is_valid_button_url, is_valid_command_name
 from bot.db.base import async_session_maker
 from bot.db.models import BotPost, BotSubscriber, BroadcastLog, BuiltBot, Command, PostComment, PostLike, User
 from bot.flow_engine import (
     _execute_node,
+    _normalize_command,
     build_content_children_view,
     build_shop_categories_view,
     build_shop_list_view,
@@ -50,7 +51,6 @@ from bot.guide import (
     SKIP_BUTTON_TEXT,
     TYPED_PHONE_INVALID,
     end_user_prefers_persian,
-    is_iran_phone,
     normalize_typed_phone,
     phone_share_keyboard,
 )
@@ -66,6 +66,8 @@ from bot.states import (
 logger = logging.getLogger(__name__)
 
 _config = load_config()
+_COMMENT_MAX_CHARS = 1000  # stored per comment
+_COMMENT_PREVIEW_CHARS = 300  # shown per comment in the "recent comments" list
 _running_bots: dict[str, asyncio.Task] = {}
 
 # easymakebot is a neutral platform, not the seller in a built bot's shop. Every
@@ -255,17 +257,21 @@ async def sync_bot_commands(bot_id: uuid.UUID) -> None:
         result = await session.execute(select(Command).where(Command.bot_id == bot_id))
         commands = list(result.scalars())
 
+    # Only names Telegram accepts go on the menu: a single invalid one (old
+    # data saved before names were validated — uppercase, spaces, Persian
+    # letters) made setMyCommands reject the whole list, leaving every
+    # user with an empty "/" menu.
     kinds: dict[str, str] = {}
     admin_only: set[str] = set()
     for c in commands:
-        if c.name.startswith("/"):
+        if is_valid_command_name(c.name):
             kinds[c.name] = c.command_type
             if c.visibility == "admin":
                 admin_only.add(c.name)
-    for node in flow.get("nodes", []):
-        if node.get("type") == "trigger":
-            name = node.get("data", {}).get("command")
-            if name and name.startswith("/"):
+    for node in flow.get("nodes", []) if isinstance(flow.get("nodes"), list) else []:
+        if isinstance(node, dict) and node.get("type") == "trigger":
+            name = _normalize_command((node.get("data") or {}).get("command", ""))
+            if is_valid_command_name(name):
                 kinds.setdefault(name, "flow")
 
     # Built-in browse-content command, only offered once there's something to browse.
@@ -312,10 +318,15 @@ async def sync_bot_commands(bot_id: uuid.UUID) -> None:
     try:
         await temp_bot.set_my_commands(everyone_commands, scope=BotCommandScopeDefault())
         owner_telegram_id = await _get_owner_telegram_id(bot_id)
-        if owner_telegram_id is not None and admin_only:
-            await temp_bot.set_my_commands(
-                all_commands, scope=BotCommandScopeChat(chat_id=owner_telegram_id)
-            )
+        if owner_telegram_id is not None:
+            if admin_only:
+                await temp_bot.set_my_commands(
+                    all_commands, scope=BotCommandScopeChat(chat_id=owner_telegram_id)
+                )
+            else:
+                # No admin-only commands left: drop the owner's chat-scoped
+                # menu, which would otherwise keep listing deleted ones.
+                await temp_bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=owner_telegram_id))
     except Exception:
         logger.warning("Failed to sync command menu for bot %s", bot_id)
     finally:
@@ -414,7 +425,12 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             except ValueError:
                 return
             product = await shop.get_product(product_id)
-            if product is not None and product.bot_id == bot_id:
+            if (
+                product is not None
+                and product.bot_id == bot_id
+                and not product.archived
+                and product.product_type != shop.CONTENT_UNLOCK_TYPE
+            ):
                 await _send_product_detail(target, product, is_fa)
             return
 
@@ -426,8 +442,49 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             return
         await _send_content_post(target, item, edit=False, is_fa=is_fa)
 
+    # Free-text input steps a user can be in. Without the two handlers
+    # below, anything typed during one of these — including "/cancel",
+    # which the prompts themselves advertise, or any other command — was
+    # captured as the answer (e.g. "/cancel" submitted as a transaction
+    # reference and sent to the owner for approval).
+    _input_states = (
+        ShopOrderStates.waiting_for_transaction_ref,
+        ShopOrderStates.waiting_for_checkout_transaction_ref,
+        ShopOrderStates.shipping_wizard,
+        PostCommentStates.waiting_for_comment,
+        SubscriberOnboardingStates.waiting_for_phone,
+        BuiltBotBroadcastStates.waiting_for_message,
+    )
+    _input_state_names = {st.state for st in _input_states}
+
+    @dp.message(CommandFilter("cancel"))
+    async def handle_cancel(message: Message, state: FSMContext) -> None:
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        if await state.get_state() is None:
+            text = "چیزی برای لغو نیست." if is_fa else "There's nothing to cancel."
+        else:
+            text = "لغو شد ❌" if is_fa else "Cancelled ❌"
+        await state.clear()
+        await message.answer(text, reply_markup=ReplyKeyboardRemove())
+
+    @dp.message(StateFilter(*_input_states), F.text.startswith("/"), ~F.text.regexp(r"^/start(\s|@|$)"))
+    async def handle_command_during_input(message: Message, state: FSMContext) -> None:
+        """A command typed mid-step abandons that step instead of being
+        stored as its answer. (/start is left to handle_start, which clears
+        the step itself and then runs normally.)"""
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        await state.clear()
+        text = (
+            "مرحله‌ی قبلی لغو شد. لطفاً دستورت رو دوباره بفرست."
+            if is_fa
+            else "The previous step was cancelled. Please send your command again."
+        )
+        await message.answer(text, reply_markup=ReplyKeyboardRemove())
+
     @dp.message(CommandStart())
     async def handle_start(message: Message, state: FSMContext) -> None:
+        if await state.get_state() in _input_state_names:
+            await state.set_state(None)  # /start always starts over
         async with async_session_maker() as session:
             result = await session.execute(select(BuiltBot).where(BuiltBot.id == bot_id))
             built_bot = result.scalar_one_or_none()
@@ -494,7 +551,16 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             return
 
         await callback.answer("Thanks for joining! ✅")
-        await callback.message.delete()
+        # callback.message was sent BY the bot, so its .from_user is the
+        # bot itself — everything resumed below (gates, order lookups,
+        # personalization, language) reads message.from_user, so hand it a
+        # copy that carries the real tapper instead (same fix as
+        # handle_command_jump).
+        tapper_message = callback.message.model_copy(update={"from_user": callback.from_user})
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass  # too old to delete — harmless, the flow still resumes
 
         # Resume whatever command's flow/action the gate actually paused
         # (stashed by flow_engine.py:_execute_node's force_join_gate branch)
@@ -514,7 +580,7 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             if legacy_command is not None and legacy_command.payload:
                 await _execute_node(
                     bot, bot_id, legacy_command.payload.get("action"), legacy_command.payload,
-                    callback.message, state, {"resume_legacy_command_id": legacy_command.id},
+                    tapper_message, state, {"resume_legacy_command_id": legacy_command.id},
                 )
             return
 
@@ -522,22 +588,22 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             # A non-/start Visual Builder flow was gated (handle_flow_command).
             if built_bot and built_bot.flow_definition:
                 await run_flow(
-                    bot, bot_id, built_bot.flow_definition, command, callback.message, state
+                    bot, bot_id, built_bot.flow_definition, command, tapper_message, state
                 )
             return
 
         if await _should_use_flow_for_start(bot_id, built_bot):
             await _register_subscriber(callback.from_user.id, unmute=True)
             await run_flow(
-                bot, bot_id, built_bot.flow_definition, "/start", callback.message, state
+                bot, bot_id, built_bot.flow_definition, "/start", tapper_message, state
             )
             if deep_link_payload:
-                await _send_deep_link_target(callback.message, deep_link_payload)
+                await _send_deep_link_target(tapper_message, deep_link_payload)
             return
 
-        await _complete_start(callback.message, callback.from_user.id)
+        await _complete_start(tapper_message, callback.from_user.id)
         if deep_link_payload:
-            await _send_deep_link_target(callback.message, deep_link_payload)
+            await _send_deep_link_target(tapper_message, deep_link_payload)
 
     async def _send_content_children(
         message: Message,
@@ -573,7 +639,7 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         if not item.product_id:
             return None
         product = await shop.get_product(item.product_id)
-        if product is None or product.product_type == shop.CONTENT_UNLOCK_TYPE:
+        if product is None or product.archived or product.product_type == shop.CONTENT_UNLOCK_TYPE:
             return None
         return product
 
@@ -582,7 +648,9 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         cart if it's for sale, a ◀️ i/n ▶️ carousel row across its siblings,
         and Back to the list."""
         rows: list[list[InlineKeyboardButton]] = []
-        if item.link_url:
+        if is_valid_button_url(item.link_url):
+            # Checked at render time too, so items saved before links were
+            # validated can't make Telegram reject the whole post.
             open_text = "🔗 باز کردن" if is_fa else "🔗 Open"
             rows.append([InlineKeyboardButton(text=open_text, url=item.link_url)])
 
@@ -973,9 +1041,19 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             header = "💬 آخرین کامنت‌ها:" if is_fa else "💬 Recent comments:"
             lines = [header]
             for comment in reversed(recent_comments):  # oldest-first, chat-like order
-                who = f"👤 #{comment.commenter_telegram_id}"
-                lines.append(f"\n{who} — {comment.created_at:%Y-%m-%d %H:%M}\n{comment.text}")
+                # No Telegram id here — this list is shown to every viewer,
+                # and a commenter's numeric id is theirs, not the public's.
+                if comment.commenter_telegram_id == callback.from_user.id:
+                    who = "👤 تو" if is_fa else "👤 You"
+                else:
+                    who = "👤"
+                body = comment.text
+                if len(body) > _COMMENT_PREVIEW_CHARS:
+                    body = body[:_COMMENT_PREVIEW_CHARS].rstrip() + "…"
+                lines.append(f"\n{who} — {comment.created_at:%Y-%m-%d %H:%M}\n{body}")
             text = "\n".join(lines)
+            if len(text) > 4000:  # Telegram's message limit is 4096
+                text = text[:4000].rstrip() + "…"
         else:
             text = "💬 هنوز کامنتی برای این پست ثبت نشده." if is_fa else "💬 No comments on this post yet."
 
@@ -1033,6 +1111,7 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             empty_text = "کامنت خالی بود — چیزی ثبت نشد." if is_fa else "Empty comment — nothing was posted."
             await message.answer(empty_text)
             return
+        text = text[:_COMMENT_MAX_CHARS]
 
         async with async_session_maker() as session:
             result = await session.execute(select(BotPost).where(BotPost.id == post_id))
@@ -1154,7 +1233,7 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         is_fa = await _end_user_prefers_persian(callback.from_user)
         product = await shop.get_product(product_id)
 
-        if product is None or product.bot_id != bot_id:
+        if product is None or product.bot_id != bot_id or product.archived:
             await callback.answer("محصول پیدا نشد." if is_fa else "Product not found.", show_alert=True)
             return
 
@@ -1182,9 +1261,14 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             buttons.append(
                 InlineKeyboardButton(text="🏦 کارت به کارت" if is_fa else "🏦 Card to Card", callback_data=f"shop_pay:card:{order.id}")
             )
-        if settings and settings.stripe_secret_key:
+        stripe_cents = shop.stripe_amount_cents(shop.order_total(order), settings)
+        if stripe_cents is not None:
+            usd = shop.format_usd(stripe_cents)
             buttons.append(
-                InlineKeyboardButton(text="🌍 استرایپ (دلاری)" if is_fa else "🌍 Stripe (USD)", callback_data=f"shop_pay:stripe:{order.id}")
+                InlineKeyboardButton(
+                    text=f"🌍 استرایپ ({usd})" if is_fa else f"🌍 Stripe ({usd})",
+                    callback_data=f"shop_pay:stripe:{order.id}",
+                )
             )
         if settings and settings.crypto_wallet_address:
             buttons.append(
@@ -1220,8 +1304,18 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         order_id = int(callback.data.split(":")[-1])
         is_fa = await _end_user_prefers_persian(callback.from_user)
         order = await shop.get_order(order_id)
-        if order is None or order.bot_id != bot_id:
+        if order is None or order.bot_id != bot_id or order.buyer_telegram_id != callback.from_user.id:
             await callback.answer("سفارش پیدا نشد." if is_fa else "Order not found.", show_alert=True)
+            return
+        if order.status != "pending":
+            # Already paid, fulfilled or rejected — an old payment button
+            # must not start a second charge or a new review for it.
+            not_payable = (
+                "این سفارش دیگه قابل پرداخت نیست. برای خرید دوباره، از منوی فروشگاه شروع کن."
+                if is_fa
+                else "This order can no longer be paid. To buy again, start from the shop menu."
+            )
+            await callback.answer(not_payable, show_alert=True)
             return
 
         pay_url = await shop.start_zarinpal_payment(order, _config.webapp_url)
@@ -1245,8 +1339,18 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         order_id = int(callback.data.split(":")[-1])
         is_fa = await _end_user_prefers_persian(callback.from_user)
         order = await shop.get_order(order_id)
-        if order is None or order.bot_id != bot_id:
+        if order is None or order.bot_id != bot_id or order.buyer_telegram_id != callback.from_user.id:
             await callback.answer("سفارش پیدا نشد." if is_fa else "Order not found.", show_alert=True)
+            return
+        if order.status != "pending":
+            # Already paid, fulfilled or rejected — an old payment button
+            # must not start a second charge or a new review for it.
+            not_payable = (
+                "این سفارش دیگه قابل پرداخت نیست. برای خرید دوباره، از منوی فروشگاه شروع کن."
+                if is_fa
+                else "This order can no longer be paid. To buy again, start from the shop menu."
+            )
+            await callback.answer(not_payable, show_alert=True)
             return
 
         pay_url = await shop.start_stripe_payment(order, _config.webapp_url)
@@ -1274,8 +1378,18 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         callback: CallbackQuery, state: FSMContext, order_id: int, method: str, info_text: str, is_fa: bool
     ) -> None:
         order = await shop.get_order(order_id)
-        if order is None or order.bot_id != bot_id:
+        if order is None or order.bot_id != bot_id or order.buyer_telegram_id != callback.from_user.id:
             await callback.answer("سفارش پیدا نشد." if is_fa else "Order not found.", show_alert=True)
+            return
+        if order.status != "pending":
+            # Already paid, fulfilled or rejected — an old payment button
+            # must not start a second charge or a new review for it.
+            not_payable = (
+                "این سفارش دیگه قابل پرداخت نیست. برای خرید دوباره، از منوی فروشگاه شروع کن."
+                if is_fa
+                else "This order can no longer be paid. To buy again, start from the shop menu."
+            )
+            await callback.answer(not_payable, show_alert=True)
             return
 
         await state.update_data(card_order_id=order_id, card_payment_method=method)
@@ -1355,7 +1469,7 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         order_id = data.get("card_order_id")
         method = data.get("card_payment_method", "card_to_card")
         order = await shop.get_order(order_id) if order_id else None
-        if order is None:
+        if order is None or order.status != "pending":
             await state.clear()
             return
 
@@ -1407,19 +1521,34 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
     @dp.callback_query(F.data.startswith("order_approve:"), F.from_user.id == owner_telegram_id)
     async def handle_order_approve(callback: CallbackQuery) -> None:
         order_id = int(callback.data.split(":")[-1])
-        order = await shop.approve_manual_payment(bot, order_id)
-        await callback.answer("Approved ✅")
-        if order is not None:
-            await callback.message.edit_reply_markup(reply_markup=None)
+        existing = await shop.get_order(order_id)
+        if existing is None or existing.bot_id != bot_id:
+            await callback.answer("Order not found.", show_alert=True)
+            return
+        order, changed = await shop.approve_manual_payment(bot, order_id)
+        if not changed:
+            # Nothing happened — say so instead of a misleading "Approved".
+            await callback.answer(f"This order is already {order.status}.", show_alert=True)
+        else:
+            await callback.answer("Approved ✅")
+        await callback.message.edit_reply_markup(reply_markup=None)
 
     @dp.callback_query(F.data.startswith("order_reject:"), F.from_user.id == owner_telegram_id)
     async def handle_order_reject(callback: CallbackQuery) -> None:
         order_id = int(callback.data.split(":")[-1])
-        await shop.reject_manual_payment(order_id)
-        await callback.answer("Rejected")
-        await callback.message.edit_reply_markup(reply_markup=None)
-
         order = await shop.get_order(order_id)
+        if order is None or order.bot_id != bot_id:
+            await callback.answer("Order not found.", show_alert=True)
+            return
+        rejected = await shop.reject_manual_payment(order_id)
+        await callback.message.edit_reply_markup(reply_markup=None)
+        if not rejected:
+            # Only a still-pending order can be rejected — never undo one
+            # that was already approved and delivered.
+            await callback.answer(f"This order is already {order.status}.", show_alert=True)
+            return
+        await callback.answer("Rejected")
+
         if order is not None:
             try:
                 await bot.send_message(
@@ -1431,6 +1560,10 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
     @dp.callback_query(F.data.startswith("retry_delivery:"), F.from_user.id == owner_telegram_id)
     async def handle_retry_delivery(callback: CallbackQuery) -> None:
         order_id = int(callback.data.split(":")[-1])
+        order = await shop.get_order(order_id)
+        if order is None or order.bot_id != bot_id:
+            await callback.answer("Order not found.", show_alert=True)
+            return
         await callback.answer("Retrying…")
         delivered = await shop.retry_delivery(bot, order_id)
         if delivered:
@@ -1440,6 +1573,26 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
     async def start_shipping_wizard(callback: CallbackQuery, state: FSMContext) -> None:
         order_id = int(callback.data.split(":")[-1])
         is_fa = await _end_user_prefers_persian(callback.from_user)
+        order = await shop.get_order(order_id)
+        # Only the buyer of a PAID order still waiting for its address may
+        # run this — never an unpaid order (the wizard's end triggers
+        # fulfillment), someone else's order, or one already shipped (an
+        # old button tapped again).
+        if (
+            order is None
+            or order.bot_id != bot_id
+            or order.buyer_telegram_id != callback.from_user.id
+            or order.status != "paid"
+            or order.shipping_address
+        ):
+            not_available = (
+                "اطلاعات ارسال این سفارش قبلاً ثبت شده یا این سفارش در دسترس نیست."
+                if is_fa
+                else "Shipping info for this order was already submitted, or the order isn't available."
+            )
+            await callback.answer(not_available, show_alert=True)
+            return
+        await state.set_data({})
         await state.update_data(shipping_order_id=order_id)
         await state.set_state(ShopOrderStates.shipping_wizard)
         method_keyboard = InlineKeyboardMarkup(
@@ -1462,6 +1615,23 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
     async def start_checkout_shipping_wizard(callback: CallbackQuery, state: FSMContext) -> None:
         checkout_id = int(callback.data.split(":")[-1])
         is_fa = await _end_user_prefers_persian(callback.from_user)
+        checkout = await shop.get_checkout(checkout_id)
+        # Same eligibility rule as start_shipping_wizard above.
+        if (
+            checkout is None
+            or checkout.bot_id != bot_id
+            or checkout.buyer_telegram_id != callback.from_user.id
+            or checkout.status != "paid"
+            or checkout.shipping_address
+        ):
+            not_available = (
+                "اطلاعات ارسال این سفارش قبلاً ثبت شده یا این سفارش در دسترس نیست."
+                if is_fa
+                else "Shipping info for this order was already submitted, or the order isn't available."
+            )
+            await callback.answer(not_available, show_alert=True)
+            return
+        await state.set_data({})
         await state.update_data(shipping_checkout_id=checkout_id)
         await state.set_state(ShopOrderStates.shipping_wizard)
         method_keyboard = InlineKeyboardMarkup(
@@ -1492,6 +1662,10 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         if index >= len(_shipping_steps):
             data = await state.get_data()
             ship_done = "ممنون! سفارش شما به‌زودی ارسال می‌شود." if is_fa else "Thanks! Your order will ship soon."
+            already = (
+                "اطلاعات ارسال این سفارش قبلاً ثبت شده." if is_fa else "Shipping info for this order was already submitted."
+            )
+            buyer_id = message.from_user.id
             if "shipping_order_id" in data:
                 order = await shop.save_shipping_info(
                     data["shipping_order_id"],
@@ -1500,8 +1674,13 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
                     data.get("shipping_phone", ""),
                     data.get("shipping_address", ""),
                     data.get("shipping_postal_code", ""),
+                    bot_id=bot_id,
+                    buyer_telegram_id=buyer_id,
                 )
                 await state.clear()
+                if order is None:
+                    await message.answer(already)
+                    return
                 await message.answer(ship_done)
                 await shop.fulfill_order(bot, order)
             else:
@@ -1512,8 +1691,13 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
                     data.get("shipping_phone", ""),
                     data.get("shipping_address", ""),
                     data.get("shipping_postal_code", ""),
+                    bot_id=bot_id,
+                    buyer_telegram_id=buyer_id,
                 )
                 await state.clear()
+                if checkout is None:
+                    await message.answer(already)
+                    return
                 await message.answer(ship_done)
                 await shop.fulfill_checkout(bot, checkout)
             return
@@ -1539,8 +1723,16 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         if "shipping_method" not in data:
             return  # still waiting for the method button tap
         index = data.get("shipping_step", 0)
+        value = (message.text or "").strip()
+        if not value:
+            # A sticker/photo/empty answer would save an empty address, which
+            # fulfillment treats as "no shipping info yet" — ask again instead.
+            prompts = _shipping_step_prompts_fa if is_fa else _shipping_step_prompts_en
+            again = "لطفاً جواب رو به‌صورت متن بفرست." if is_fa else "Please answer with text."
+            await message.answer(f"{again}\n{prompts[_shipping_steps[index]]}")
+            return
         key = f"shipping_{_shipping_steps[index]}"
-        await state.update_data(**{key: (message.text or "").strip()})
+        await state.update_data(**{key: value})
         await _send_shipping_step(message, state, index + 1, is_fa)
 
     # --- Cart: "➕ Add to Cart" alongside the direct "🛒 Buy Now" flow above.
@@ -1704,9 +1896,14 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             buttons.append(
                 InlineKeyboardButton(text="🏦 کارت به کارت" if is_fa else "🏦 Card to Card", callback_data=f"cart_pay:card:{checkout.id}")
             )
-        if settings and settings.stripe_secret_key:
+        stripe_cents = shop.stripe_amount_cents(shop.checkout_total(checkout), settings)
+        if stripe_cents is not None:
+            usd = shop.format_usd(stripe_cents)
             buttons.append(
-                InlineKeyboardButton(text="🌍 استرایپ (دلاری)" if is_fa else "🌍 Stripe (USD)", callback_data=f"cart_pay:stripe:{checkout.id}")
+                InlineKeyboardButton(
+                    text=f"🌍 استرایپ ({usd})" if is_fa else f"🌍 Stripe ({usd})",
+                    callback_data=f"cart_pay:stripe:{checkout.id}",
+                )
             )
         if settings and settings.crypto_wallet_address:
             buttons.append(
@@ -1742,8 +1939,16 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         checkout_id = int(callback.data.split(":")[-1])
         is_fa = await _end_user_prefers_persian(callback.from_user)
         checkout = await shop.get_checkout(checkout_id)
-        if checkout is None or checkout.bot_id != bot_id:
+        if checkout is None or checkout.bot_id != bot_id or checkout.buyer_telegram_id != callback.from_user.id:
             await callback.answer("تسویه‌حساب پیدا نشد." if is_fa else "Checkout not found.", show_alert=True)
+            return
+        if checkout.status != "pending":
+            not_payable = (
+                "این سفارش دیگه قابل پرداخت نیست. برای خرید دوباره، از سبد خرید شروع کن."
+                if is_fa
+                else "This order can no longer be paid. To buy again, start from your cart."
+            )
+            await callback.answer(not_payable, show_alert=True)
             return
 
         pay_url = await shop.start_zarinpal_checkout(checkout, _config.webapp_url)
@@ -1767,8 +1972,16 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         checkout_id = int(callback.data.split(":")[-1])
         is_fa = await _end_user_prefers_persian(callback.from_user)
         checkout = await shop.get_checkout(checkout_id)
-        if checkout is None or checkout.bot_id != bot_id:
+        if checkout is None or checkout.bot_id != bot_id or checkout.buyer_telegram_id != callback.from_user.id:
             await callback.answer("تسویه‌حساب پیدا نشد." if is_fa else "Checkout not found.", show_alert=True)
+            return
+        if checkout.status != "pending":
+            not_payable = (
+                "این سفارش دیگه قابل پرداخت نیست. برای خرید دوباره، از سبد خرید شروع کن."
+                if is_fa
+                else "This order can no longer be paid. To buy again, start from your cart."
+            )
+            await callback.answer(not_payable, show_alert=True)
             return
 
         pay_url = await shop.start_stripe_checkout(checkout, _config.webapp_url)
@@ -1791,8 +2004,16 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         callback: CallbackQuery, state: FSMContext, checkout_id: int, method: str, info_text: str, is_fa: bool
     ) -> None:
         checkout = await shop.get_checkout(checkout_id)
-        if checkout is None or checkout.bot_id != bot_id:
+        if checkout is None or checkout.bot_id != bot_id or checkout.buyer_telegram_id != callback.from_user.id:
             await callback.answer("تسویه‌حساب پیدا نشد." if is_fa else "Checkout not found.", show_alert=True)
+            return
+        if checkout.status != "pending":
+            not_payable = (
+                "این سفارش دیگه قابل پرداخت نیست. برای خرید دوباره، از سبد خرید شروع کن."
+                if is_fa
+                else "This order can no longer be paid. To buy again, start from your cart."
+            )
+            await callback.answer(not_payable, show_alert=True)
             return
 
         await state.update_data(cart_checkout_id=checkout_id, cart_payment_method=method)
@@ -1872,7 +2093,7 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         checkout_id = data.get("cart_checkout_id")
         method = data.get("cart_payment_method", "card_to_card")
         checkout = await shop.get_checkout(checkout_id) if checkout_id else None
-        if checkout is None:
+        if checkout is None or checkout.status != "pending":
             await state.clear()
             return
 
@@ -1922,19 +2143,31 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
     @dp.callback_query(F.data.startswith("cart_approve:"), F.from_user.id == owner_telegram_id)
     async def handle_cart_approve(callback: CallbackQuery) -> None:
         checkout_id = int(callback.data.split(":")[-1])
-        checkout = await shop.approve_manual_checkout(bot, checkout_id)
-        await callback.answer("Approved ✅")
-        if checkout is not None:
-            await callback.message.edit_reply_markup(reply_markup=None)
+        existing = await shop.get_checkout(checkout_id)
+        if existing is None or existing.bot_id != bot_id:
+            await callback.answer("Checkout not found.", show_alert=True)
+            return
+        checkout, changed = await shop.approve_manual_checkout(bot, checkout_id)
+        if not changed:
+            await callback.answer(f"This checkout is already {checkout.status}.", show_alert=True)
+        else:
+            await callback.answer("Approved ✅")
+        await callback.message.edit_reply_markup(reply_markup=None)
 
     @dp.callback_query(F.data.startswith("cart_reject:"), F.from_user.id == owner_telegram_id)
     async def handle_cart_reject(callback: CallbackQuery) -> None:
         checkout_id = int(callback.data.split(":")[-1])
-        await shop.reject_manual_checkout(checkout_id)
-        await callback.answer("Rejected")
-        await callback.message.edit_reply_markup(reply_markup=None)
-
         checkout = await shop.get_checkout(checkout_id)
+        if checkout is None or checkout.bot_id != bot_id:
+            await callback.answer("Checkout not found.", show_alert=True)
+            return
+        rejected = await shop.reject_manual_checkout(checkout_id)
+        await callback.message.edit_reply_markup(reply_markup=None)
+        if not rejected:
+            await callback.answer(f"This checkout is already {checkout.status}.", show_alert=True)
+            return
+        await callback.answer("Rejected")
+
         if checkout is not None:
             try:
                 await bot.send_message(
@@ -2198,15 +2431,6 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             is_fa = await _end_user_prefers_persian(callback.from_user)
             text = "این دستور دیگه در دسترس نیست." if is_fa else "This command is no longer available."
             await callback.message.answer(text)
-
-    @dp.message(
-        BuiltBotBroadcastStates.waiting_for_message,
-        CommandFilter("cancel"),
-        F.from_user.id == owner_telegram_id,
-    )
-    async def cancel_broadcast(message: Message, state: FSMContext) -> None:
-        await state.clear()
-        await message.answer("Broadcast cancelled ❌")
 
     @dp.message(BuiltBotBroadcastStates.waiting_for_message, F.from_user.id == owner_telegram_id)
     async def handle_broadcast_message(message: Message, state: FSMContext) -> None:

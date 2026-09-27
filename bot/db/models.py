@@ -85,6 +85,15 @@ class BuiltBot(Base):
     bot_username: Mapped[str] = mapped_column(String(64))
     display_name: Mapped[str] = mapped_column(String(128))
 
+    # Telegram's own numeric id for this bot (the part of the token before
+    # ":"), kept in plaintext because `token` above is encrypted with a
+    # random IV and so can't be compared for duplicates. Used to stop the
+    # same Telegram bot being registered twice (two polling tasks on one
+    # token fight each other, and a re-registration would otherwise hand out
+    # a second free trial) — see bot/handlers/create_bot.py. Backfilled at
+    # startup for rows that predate it (bot/db/base.py:init_db).
+    telegram_bot_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+
     # Force-join gate: when enabled, users must join every listed JoinChannel
     # before the built bot will respond to /start (see bot/runtime.py).
     force_join_enabled: Mapped[bool] = mapped_column(
@@ -440,6 +449,12 @@ class Product(Base):
     original_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # Set instead of a hard delete when the owner deletes a product that
+    # already has orders (orders keep a FK to it for invoices/history).
+    # Archived products are hidden from every buyer- and owner-facing list
+    # and can't be bought or added to a cart — see bot/shop.py.
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
     # "physical" (ships — collects shipping info after payment),
     # "digital" (delivers delivery_text/delivery_file_url after payment), or
     # "access" (sets BotSubscriber.access_level to access_level_name), or
@@ -548,6 +563,12 @@ class ShopSettings(Base):
     # (Product.price is treated as whole US dollars on this path, vs Toman on
     # the Zarinpal path). Same graceful-omit pattern: unset = not offered.
     stripe_secret_key: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
+    # How many Toman one US dollar is worth, for converting Toman prices to a
+    # Stripe (USD) charge. Required whenever a Toman method (Zarinpal/card)
+    # is also configured — otherwise prices are ambiguous and Stripe isn't
+    # offered (bot/shop.py:stripe_amount_cents). NULL on a Stripe-only shop
+    # keeps the legacy "price is whole US dollars" behavior.
+    stripe_toman_per_usd: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Crypto/TON: same manual "buyer sends, submits a tx ref, owner approves"
     # flow as card_number above (bot/shop.py:submit_manual_payment) — no
@@ -663,6 +684,12 @@ class Order(Base):
     # button (bot/runtime.py:handle_retry_delivery -> bot/shop.py:retry_delivery)
     # and the order stays "paid" (not "fulfilled") until it succeeds.
     fulfillment_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # True once this order's unit has been taken out of Product.stock_quantity
+    # (bot/shop.py:_reserve_stock) — done exactly once, at the moment payment
+    # is confirmed, so a physical order that waits for shipping info can't be
+    # oversold in between, and a re-run of fulfillment never decrements twice.
+    stock_reserved: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     # Set only for an order created via the cart's "Checkout" step (bot/shop.py:
     # create_checkout) — None for every direct "🛒 Buy" purchase. Several

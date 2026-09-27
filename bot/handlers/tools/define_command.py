@@ -23,7 +23,7 @@ from bot.keyboards import (
     tool_button_texts,
     tools_reply_keyboard,
 )
-from bot.message_buttons import validate_buttons
+from bot.message_buttons import MAX_BUTTON_TEXT, MAX_BUTTONS, is_valid_command_name, validate_buttons
 from bot.runtime import sync_bot_commands
 from bot.session import make_session
 from bot.states import DefineCommandStates
@@ -216,10 +216,25 @@ async def start_define_command(message: Message, state: FSMContext) -> None:
 @router.message(DefineCommandStates.waiting_for_command_name)
 async def receive_command_name(message: Message, state: FSMContext) -> None:
     is_fa = await owner_prefers_persian(message.from_user)
-    name = message.text.strip()
+    name = (message.text or "").strip().lower()
 
-    if not name.startswith("/"):
-        text = "دستور باید با / شروع بشه. دوباره امتحان کن." if is_fa else "The command must start with /. Try again."
+    if not is_valid_command_name(name):
+        text = (
+            "اسم دستور باید با / شروع بشه و فقط حروف کوچک انگلیسی، عدد و _ داشته باشه "
+            "(بدون فاصله، حداکثر ۳۲ کاراکتر)، مثلاً /menu. دوباره امتحان کن."
+            if is_fa
+            else "The command must start with / and use only lowercase English letters, digits and _ "
+            "(no spaces, max 32 characters), e.g. /menu. Try again."
+        )
+        await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+        return
+
+    if name == "/cancel":
+        text = (
+            "/cancel یه دستور رزرو‌شده‌ست (برای لغو مراحل). یه اسم دیگه انتخاب کن."
+            if is_fa
+            else "/cancel is reserved (it cancels the current step). Please choose another name."
+        )
         await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
         return
 
@@ -281,6 +296,34 @@ async def receive_command_action(message: Message, state: FSMContext) -> None:
 # the accumulated messages[] list is saved via _save_command. See
 # bot/flow_engine.py:_execute_node ("send_message"/"message" branch) for how
 # this shape is interpreted, and bot/message_buttons.py for button rules.
+
+# Telegram limits: 1024 chars for a media caption, 4096 for a text message,
+# and 20 MB for a file a bot can download (needed to re-upload it through
+# the owner's own bot below).
+_MAX_CAPTION_CHARS = 1024
+_MAX_TEXT_CHARS = 4096
+_MAX_BOT_DOWNLOAD_BYTES = 20 * 1024 * 1024
+
+
+def _no_caption_text(is_fa: bool = False) -> str:
+    return "⏭ بدون متن" if is_fa else "⏭ No text"
+
+
+def _no_caption_texts() -> set[str]:
+    return {_no_caption_text(True), _no_caption_text(False)}
+
+
+def _no_caption_keyboard(is_fa: bool = False) -> ReplyKeyboardMarkup:
+    """Telegram clients won't send a whitespace-only message, so "send a
+    space to skip" was impossible — an explicit button instead."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=_no_caption_text(is_fa))],
+            [KeyboardButton(text=cancel_button_text(is_fa))],
+        ],
+        resize_keyboard=True,
+    )
+
 
 def _attachment_photo_text(is_fa: bool = False) -> str:
     return "📷 عکس" if is_fa else "📷 Photo"
@@ -426,11 +469,11 @@ async def receive_message_attachment_file(message: Message, state: FSMContext, b
     bot_id = data.get("active_bot_id")
 
     if expected_type == "photo" and message.photo:
-        file_id = message.photo[-1].file_id
+        file_id, file_size = message.photo[-1].file_id, message.photo[-1].file_size
     elif expected_type == "video" and message.video:
-        file_id = message.video.file_id
+        file_id, file_size = message.video.file_id, message.video.file_size
     elif expected_type == "document" and message.document:
-        file_id = message.document.file_id
+        file_id, file_size = message.document.file_id, message.document.file_size
     else:
         text = "این نوع فایلی که خواستم نیست. دوباره امتحان کن." if is_fa else "That's not the file type I asked for. Please try again."
         await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
@@ -445,13 +488,28 @@ async def receive_message_attachment_file(message: Message, state: FSMContext, b
         await state.set_state(None)
         return
 
+    # Re-upload once through the owner's OWN built bot (sent back to the
+    # owner themselves) to mint a file_id that bot can actually use later.
+    # Same technique as bot/handlers/tools/content_list.py's "Add Post" flow.
+    too_big = (
+        "این فایل بزرگ‌تر از ۲۰ مگابایته و ربات نمی‌تونه دانلودش کنه (محدودیت تلگرام). "
+        "یه فایل کوچیک‌تر بفرست."
+        if is_fa
+        else "This file is larger than 20 MB, which bots can't download (a Telegram limit). "
+        "Please send a smaller file."
+    )
+    if file_size is not None and file_size > _MAX_BOT_DOWNLOAD_BYTES:
+        await message.answer(too_big, reply_markup=cancel_reply_keyboard(is_fa))
+        return
+
     # A file_id from THIS (builder) bot's chat is only valid on this bot's
-    # own token — download its bytes here and re-upload once through the
-    # owner's OWN built bot (sent back to the owner themselves) to mint a
-    # file_id that bot can actually use later. Same technique as
-    # bot/handlers/tools/content_list.py's "Add Post" flow.
-    tg_file = await bot.get_file(file_id)
-    file_bytes = await bot.download_file(tg_file.file_path)
+    # own token — download it here so it can be re-uploaded below.
+    try:
+        tg_file = await bot.get_file(file_id)
+        file_bytes = await bot.download_file(tg_file.file_path)
+    except Exception:
+        await message.answer(too_big, reply_markup=cancel_reply_keyboard(is_fa))
+        return
     ext = {"photo": "jpg", "video": "mp4", "document": "bin"}[expected_type]
     input_file = BufferedInputFile(file_bytes.read(), filename=f"command_attachment.{ext}")
 
@@ -485,7 +543,7 @@ async def receive_message_attachment_file(message: Message, state: FSMContext, b
     await state.update_data(current_block=current_block)
 
     caption_from_upload = (message.caption or "").strip()
-    if caption_from_upload:
+    if caption_from_upload and len(caption_from_upload) <= _MAX_CAPTION_CHARS:
         current_block["text"] = caption_from_upload
         await state.update_data(current_block=current_block)
         await _ask_for_buttons(message, state, is_fa)
@@ -493,11 +551,13 @@ async def receive_message_attachment_file(message: Message, state: FSMContext, b
 
     await state.set_state(DefineCommandStates.waiting_for_command_message_text)
     text = (
-        "حالا کپشن این پیام رو بنویس (اگه نمی‌خوای متنی داشته باشه، یه فاصله بفرست)."
+        f"حالا کپشن این پیام رو بنویس (حداکثر {_MAX_CAPTION_CHARS} کاراکتر)، "
+        "یا اگه نمی‌خوای متنی داشته باشه دکمه‌ی «بدون متن» رو بزن."
         if is_fa
-        else "Now write this message's caption (send a single space if you don't want any text)."
+        else f"Now write this message's caption (max {_MAX_CAPTION_CHARS} characters), "
+        "or tap \"No text\" if you don't want any."
     )
-    await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+    await message.answer(text, reply_markup=_no_caption_keyboard(is_fa))
 
 
 @router.message(DefineCommandStates.waiting_for_command_message_text)
@@ -507,9 +567,29 @@ async def receive_command_message_text(message: Message, state: FSMContext) -> N
     data = await state.get_data()
     current_block = dict(data.get("current_block") or {})
 
-    if not text_in and not current_block.get("media_type"):
+    has_media = bool(current_block.get("media_type"))
+    if has_media and text_in in _no_caption_texts():
+        text_in = ""
+
+    if not text_in and not has_media:
         text = "این فیلد نمی‌تونه خالی باشه. دوباره امتحان کن." if is_fa else "This field can't be empty. Please try again."
         await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+        return
+
+    limit = _MAX_CAPTION_CHARS if has_media else _MAX_TEXT_CHARS
+    if len(text_in) > limit:
+        text = (
+            f"این متن {len(text_in)} کاراکتره ولی حداکثر {limit} کاراکتر مجازه"
+            + (" (محدودیت تلگرام برای کپشن عکس/ویدیو/فایل)" if has_media else "")
+            + ". کوتاه‌ترش کن و دوباره بفرست."
+            if is_fa
+            else f"This text is {len(text_in)} characters, but the maximum is {limit}"
+            + (" (Telegram's limit for a photo/video/file caption)" if has_media else "")
+            + ". Please shorten it and send it again."
+        )
+        await message.answer(
+            text, reply_markup=_no_caption_keyboard(is_fa) if has_media else cancel_reply_keyboard(is_fa)
+        )
         return
 
     current_block["text"] = text_in
@@ -518,6 +598,18 @@ async def receive_command_message_text(message: Message, state: FSMContext) -> N
 
 
 async def _ask_for_buttons(message: Message, state: FSMContext, is_fa: bool) -> None:
+    data = await state.get_data()
+    if len((data.get("current_block") or {}).get("buttons") or []) >= MAX_BUTTONS:
+        # Full — offering "add another button" would only lead to an error
+        # the owner could escape only by cancelling the whole wizard.
+        text = (
+            f"این پیام به حداکثر {MAX_BUTTONS} دکمه رسید."
+            if is_fa
+            else f"This message has reached the maximum of {MAX_BUTTONS} buttons."
+        )
+        await message.answer(text)
+        await _ask_more_messages(message, state, is_fa)
+        return
     await state.set_state(DefineCommandStates.waiting_for_message_button_choice)
     text = "می‌خوای زیر این پیام دکمه هم باشه؟" if is_fa else "Want to add any buttons under this message?"
     await message.answer(text, reply_markup=_button_choice_keyboard(is_fa))
@@ -548,8 +640,12 @@ async def receive_button_label(message: Message, state: FSMContext) -> None:
     is_fa = await owner_prefers_persian(message.from_user)
     label = (message.text or "").strip()
 
-    if not label:
-        text = "متن دکمه نمی‌تونه خالی باشه." if is_fa else "Button label can't be empty."
+    if not label or len(label) > MAX_BUTTON_TEXT:
+        text = (
+            f"متن دکمه نمی‌تونه خالی یا بیشتر از {MAX_BUTTON_TEXT} کاراکتر باشه."
+            if is_fa
+            else f"Button label can't be empty or longer than {MAX_BUTTON_TEXT} characters."
+        )
         await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
         return
 
@@ -575,7 +671,7 @@ async def receive_button_value(message: Message, state: FSMContext) -> None:
     if button_type == "url":
         new_button["url"] = value
     else:
-        new_button["command"] = value
+        new_button["command"] = value.lower()
 
     current_block = dict(data.get("current_block") or {})
     buttons = list(current_block.get("buttons") or [])

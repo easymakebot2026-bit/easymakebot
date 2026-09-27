@@ -25,6 +25,35 @@ add_filter( 'kses_allowed_protocols', function ( $p ) {
 
 /* ─────────────────────────  helpers (poller + gateway share these)  ───────────────────────── */
 
+/**
+ * The official USDT (Tether) jetton master on TON — friendly form
+ * EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs. A jetton's *symbol* is
+ * chosen freely by whoever deploys it, so anyone can mint a worthless token
+ * called "USDT"; only the master contract address identifies the real one.
+ */
+const EMB_TON_USDT_MASTER_RAW = '0:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe';
+
+/** Any TON address form (raw "0:hex" or friendly base64url) → lowercase raw, or ''. */
+function emb_ton_to_raw( $addr ) {
+	$addr = trim( (string) $addr );
+	if ( preg_match( '/^(-?\d+):([0-9a-fA-F]{64})$/', $addr, $m ) ) {
+		return strtolower( $m[1] . ':' . $m[2] );
+	}
+	if ( 48 === strlen( $addr ) ) {
+		$bin = base64_decode( strtr( $addr, '-_', '+/' ), true );
+		if ( false !== $bin && 36 === strlen( $bin ) ) {
+			$wc = unpack( 'c', $bin[1] )[1];
+			return $wc . ':' . bin2hex( substr( $bin, 2, 32 ) );
+		}
+	}
+	return '';
+}
+
+function emb_ton_is_official_usdt( $jetton_address ) {
+	$raw = emb_ton_to_raw( $jetton_address );
+	return '' !== $raw && hash_equals( EMB_TON_USDT_MASTER_RAW, $raw );
+}
+
 
 function emb_ton_settings() {
 	return get_option( 'woocommerce_' . EMB_TON_ID . '_settings', array() );
@@ -192,9 +221,10 @@ function emb_ton_fetch_incoming() {
 				if ( $raw && strtolower( (string) ( $t['recipient']['address'] ?? '' ) ) !== $raw ) {
 					continue;
 				}
-				$sym = strtoupper( (string) ( $t['jetton']['symbol'] ?? '' ) );
-				if ( false === strpos( $sym, 'USD' ) ) {
-					continue; // only USDT-style jettons
+				// Only the real USDT contract counts — never a look-alike token
+				// that merely calls itself "USDT" (see EMB_TON_USDT_MASTER_RAW).
+				if ( ! emb_ton_is_official_usdt( $t['jetton']['address'] ?? '' ) ) {
+					continue;
 				}
 				$dec = (int) ( $t['jetton']['decimals'] ?? 6 );
 				$amt = (float) ( $t['amount'] ?? 0 ) / pow( 10, $dec );
@@ -275,6 +305,25 @@ function emb_ton_render_box( $order_id, $plain = false ) {
 
 /* ─────────────────────────  matcher / poller  ───────────────────────── */
 
+/** True if another order was already completed with this transaction. */
+function emb_ton_tx_already_used( $hash, $except_order_id ) {
+	if ( '' === (string) $hash ) {
+		return false;
+	}
+	$ids = wc_get_orders( array(
+		'limit'      => 2,
+		'return'     => 'ids',
+		'meta_key'   => '_emb_ton_txid', // phpcs:ignore WordPress.DB.SlowDBQuery
+		'meta_value' => (string) $hash, // phpcs:ignore WordPress.DB.SlowDBQuery
+	) );
+	foreach ( (array) $ids as $id ) {
+		if ( (int) $id !== (int) $except_order_id ) {
+			return true;
+		}
+	}
+	return false;
+}
+
 function emb_ton_try_match_orders( $only_order_id = 0 ) {
 	$wallet = emb_ton_wallet();
 	if ( '' === $wallet ) {
@@ -309,9 +358,20 @@ function emb_ton_try_match_orders( $only_order_id = 0 ) {
 		$comment  = (string) $order->get_meta( '_emb_ton_comment' );
 		$exp_nano = (int) $order->get_meta( '_emb_ton_expected_nano' );
 		$exp_usd  = (float) $order->get_meta( '_emb_ton_usd' );
+		$created  = $order->get_date_created();
+		$not_before = $created ? $created->getTimestamp() - 5 * MINUTE_IN_SECONDS : 0;
 
 		foreach ( $txs as $t ) {
 			if ( $t['comment'] === '' || strcasecmp( $t['comment'], $comment ) !== 0 ) {
+				continue;
+			}
+			// A transfer older than the order can't be its payment (the memo
+			// is just "EMB-<order id>", so an old transfer could share it).
+			if ( $t['utime'] > 0 && $t['utime'] < $not_before ) {
+				continue;
+			}
+			// One on-chain transfer pays for one order, ever.
+			if ( emb_ton_tx_already_used( $t['hash'], $order->get_id() ) ) {
 				continue;
 			}
 			$match = ( $t['ton_nano'] > 0 && $exp_nano > 0 && $t['ton_nano'] >= $exp_nano * $tol )

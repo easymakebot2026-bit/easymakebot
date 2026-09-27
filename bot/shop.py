@@ -25,7 +25,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 
 from bot import pricing
 from bot.db.base import async_session_maker
@@ -153,7 +153,11 @@ async def get_products(bot_id: uuid.UUID) -> list[Product]:
     async with async_session_maker() as session:
         result = await session.execute(
             select(Product)
-            .where(Product.bot_id == bot_id, Product.product_type != CONTENT_UNLOCK_TYPE)
+            .where(
+                Product.bot_id == bot_id,
+                Product.product_type != CONTENT_UNLOCK_TYPE,
+                Product.archived.is_(False),
+            )
             .order_by(Product.id)
         )
         return list(result.scalars())
@@ -171,7 +175,11 @@ async def get_products_page(
     async with async_session_maker() as session:
         result = await session.execute(
             select(Product)
-            .where(Product.bot_id == bot_id, Product.product_type != CONTENT_UNLOCK_TYPE)
+            .where(
+                Product.bot_id == bot_id,
+                Product.product_type != CONTENT_UNLOCK_TYPE,
+                Product.archived.is_(False),
+            )
             .order_by(Product.id)
             .offset(offset)
             .limit(limit + 1)
@@ -190,7 +198,14 @@ async def get_standalone_products(bot_id: uuid.UUID) -> list[Product]:
         linked_ids = select(ContentItem.product_id).where(ContentItem.product_id.isnot(None))
         result = await session.execute(
             select(Product)
-            .where(Product.bot_id == bot_id, Product.id.not_in(linked_ids))
+            .where(
+                Product.bot_id == bot_id,
+                Product.id.not_in(linked_ids),
+                # A hidden per-item unlock product whose content item was
+                # deleted is no longer linked — still never a shop product.
+                Product.product_type != CONTENT_UNLOCK_TYPE,
+                Product.archived.is_(False),
+            )
             .order_by(Product.id)
         )
         return list(result.scalars())
@@ -246,20 +261,60 @@ async def upsert_products_from_import(bot_id: uuid.UUID, items: list[dict]) -> d
             select(Product).where(Product.bot_id == bot_id, Product.import_code.isnot(None))
         )
         code_to_product = {p.import_code: p for p in result.scalars()}
+        campaign = (
+            await session.execute(
+                select(PriceCampaign).where(
+                    PriceCampaign.bot_id == bot_id, PriceCampaign.status == "active"
+                )
+            )
+        ).scalar_one_or_none()
 
         for item in items:
             if item["action"] == "delete":
                 target = code_to_product.get(item["code"])
-                if target is not None:
-                    await session.delete(target)
+                if target is not None and not target.archived:
+                    has_history = (
+                        await session.execute(select(Order.id).where(Order.product_id == target.id).limit(1))
+                    ).scalar_one_or_none() is not None or (
+                        await session.execute(
+                            select(ProductDeliveryItem.id)
+                            .where(
+                                ProductDeliveryItem.product_id == target.id,
+                                ProductDeliveryItem.status != "available",
+                            )
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none() is not None
+                    await session.execute(delete(CartItem).where(CartItem.product_id == target.id))
+                    await session.execute(
+                        update(ContentItem).where(ContentItem.product_id == target.id).values(product_id=None)
+                    )
+                    if has_history:
+                        # Same rule as delete_or_archive_product: an ordered
+                        # product is archived, never hard-deleted (FK from orders).
+                        target.archived = True
+                    else:
+                        await session.execute(
+                            delete(ProductDeliveryItem).where(ProductDeliveryItem.product_id == target.id)
+                        )
+                        await session.delete(target)
+                        code_to_product.pop(item["code"], None)
                     deleted += 1
                 continue
 
             existing = code_to_product.get(item["code"]) if item["code"] else None
             if existing is not None:
+                existing.archived = False  # re-importing a deleted code brings it back
                 existing.name = item["name"]
                 existing.description = item["description"]
-                existing.price = item["price"]
+                if campaign is not None and existing.original_price is not None:
+                    # A campaign is running: the imported price is the new
+                    # baseline, and the live price is that baseline adjusted —
+                    # otherwise the campaign's revert would restore the OLD price.
+                    existing.original_price = item["price"]
+                    existing.price = pricing.adjusted_price(item["price"], campaign.direction, campaign.percent)
+                else:
+                    existing.price = item["price"]
                 existing.cost_price = item["cost_price"]
                 existing.stock_quantity = item["stock_quantity"]
                 existing.image_url = item["image_url"]
@@ -284,6 +339,51 @@ async def upsert_products_from_import(bot_id: uuid.UUID, items: list[dict]) -> d
         await session.commit()
 
     return {"created": created, "updated": updated, "deleted": deleted}
+
+
+async def delete_or_archive_product(bot_id: uuid.UUID | str, product_id: int) -> str | None:
+    """Owner deleted a product. Returns "deleted", "archived", or None if the
+    product doesn't exist / isn't this bot's. A product that has ever been
+    ordered can't be hard-deleted (Order.product_id is a FK kept for
+    invoices and order history), so it's archived instead — hidden from
+    every list and no longer purchasable — which is what the owner means
+    by "delete" anyway. Cart lines and unsold pool items go either way."""
+    async with async_session_maker() as session:
+        product = (
+            await session.execute(select(Product).where(Product.id == product_id))
+        ).scalar_one_or_none()
+        if product is None or str(product.bot_id) != str(bot_id):
+            return None
+
+        await session.execute(delete(CartItem).where(CartItem.product_id == product_id))
+        await session.execute(
+            delete(ProductDeliveryItem).where(
+                ProductDeliveryItem.product_id == product_id, ProductDeliveryItem.status == "available"
+            )
+        )
+        has_orders = (
+            await session.execute(select(Order.id).where(Order.product_id == product_id).limit(1))
+        ).scalar_one_or_none() is not None
+        has_assigned_items = (
+            await session.execute(
+                select(ProductDeliveryItem.id).where(ProductDeliveryItem.product_id == product_id).limit(1)
+            )
+        ).scalar_one_or_none() is not None
+
+        if has_orders or has_assigned_items:
+            product.archived = True
+            await session.execute(
+                update(ContentItem).where(ContentItem.product_id == product_id).values(product_id=None)
+            )
+            outcome = "archived"
+        else:
+            await session.execute(
+                update(ContentItem).where(ContentItem.product_id == product_id).values(product_id=None)
+            )
+            await session.delete(product)
+            outcome = "deleted"
+        await session.commit()
+        return outcome
 
 
 async def get_product(product_id: int) -> Product | None:
@@ -595,7 +695,7 @@ async def expire_due_campaigns() -> list[uuid.UUID]:
 
 async def create_order(bot_id: uuid.UUID, product_id: int, buyer_telegram_id: int) -> Order | None:
     product = await get_product(product_id)
-    if product is None or product.bot_id != bot_id:
+    if product is None or product.bot_id != bot_id or product.archived:
         return None
     if product.stock_quantity is not None and product.stock_quantity <= 0:
         return None  # sold out — stock is only decremented at fulfillment, but never sold below 0
@@ -638,8 +738,10 @@ async def add_to_cart(bot_id: uuid.UUID, buyer_telegram_id: int, product_id: int
     If the product is already in the buyer's cart, increments its quantity
     (capped at MAX_CART_QUANTITY) instead of no-op'ing — see CartItem.quantity."""
     product = await get_product(product_id)
-    if product is None or product.bot_id != bot_id:
+    if product is None or product.bot_id != bot_id or product.archived:
         return False
+    if product.product_type == CONTENT_UNLOCK_TYPE:
+        return False  # a single-item unlock is bought directly, never via the cart
 
     async with async_session_maker() as session:
         result = await session.execute(
@@ -727,7 +829,8 @@ async def create_checkout(bot_id: uuid.UUID, buyer_telegram_id: int) -> Checkout
     items = await get_cart_items(bot_id, buyer_telegram_id)
     available = [
         (cart_item, product) for cart_item, product in items
-        if product.stock_quantity is None or product.stock_quantity >= cart_item.quantity
+        if not product.archived
+        and (product.stock_quantity is None or product.stock_quantity >= cart_item.quantity)
     ]
     if not available:
         return None
@@ -761,7 +864,9 @@ async def create_checkout(bot_id: uuid.UUID, buyer_telegram_id: int) -> Checkout
         # enough stock for its full quantity) is dropped here too, so it
         # doesn't linger and confuse the next checkout attempt.
         for cart_item, product in items:
-            if product.stock_quantity is not None and product.stock_quantity < cart_item.quantity:
+            if product.archived or (
+                product.stock_quantity is not None and product.stock_quantity < cart_item.quantity
+            ):
                 await session.delete(cart_item)
 
         await session.commit()
@@ -902,6 +1007,34 @@ async def verify_zarinpal_payment(authority: str) -> Order | None:
     return await get_order(order.id)
 
 
+STRIPE_MIN_CENTS = 50  # Stripe rejects USD charges under $0.50
+
+
+def stripe_amount_cents(total_toman: int, settings: ShopSettings | None) -> int | None:
+    """The USD amount (cents) to charge on Stripe for a `total_toman` price,
+    or None when Stripe must not be offered for this shop. Prices are stored
+    in Toman; with ShopSettings.stripe_toman_per_usd set they're converted
+    at that rate. Without a rate, the legacy "prices are whole US dollars"
+    reading is only safe on a Stripe-only shop — if a Toman method
+    (Zarinpal/card-to-card) is configured too, the same number means Toman
+    there, and charging it as dollars would bill a 490,000 Toman item as
+    $490,000, so Stripe is withheld until the owner sets a rate."""
+    if settings is None or not settings.stripe_secret_key:
+        return None
+    rate = settings.stripe_toman_per_usd
+    if rate and rate > 0:
+        cents = -(-total_toman * 100 // rate)  # round up to the next cent
+    elif settings.zarinpal_merchant_id or settings.card_number:
+        return None
+    else:
+        cents = total_toman * 100
+    return max(STRIPE_MIN_CENTS, cents)
+
+
+def format_usd(cents: int) -> str:
+    return f"${cents / 100:,.2f}"
+
+
 async def _stripe_create_session(
     secret_key: str, amount_cents: int, description: str, success_url: str, cancel_url: str
 ) -> tuple[str, str] | None:
@@ -956,7 +1089,8 @@ async def start_stripe_payment(order: Order, callback_base_url: str) -> str | No
     hosted checkout URL to redirect the buyer to — or None if Stripe isn't
     configured or the request failed."""
     settings = await get_shop_settings(order.bot_id)
-    if settings is None or not settings.stripe_secret_key:
+    amount_cents = stripe_amount_cents(order_total(order), settings)
+    if amount_cents is None:
         return None
 
     product = await get_product(order.product_id)
@@ -965,7 +1099,7 @@ async def start_stripe_payment(order: Order, callback_base_url: str) -> str | No
 
     created = await _stripe_create_session(
         settings.stripe_secret_key,
-        order_total(order) * 100,  # dollars -> cents, VAT-inclusive
+        amount_cents,  # VAT-inclusive, converted per stripe_amount_cents
         product.name if product else "Purchase",
         success_url,
         cancel_url,
@@ -1107,14 +1241,15 @@ async def verify_zarinpal_checkout(authority: str) -> Checkout | None:
 
 async def start_stripe_checkout(checkout: Checkout, callback_base_url: str) -> str | None:
     settings = await get_shop_settings(checkout.bot_id)
-    if settings is None or not settings.stripe_secret_key:
+    amount_cents = stripe_amount_cents(checkout_total(checkout), settings)
+    if amount_cents is None:
         return None
 
     success_url = callback_base_url + "/payment/stripe/callback?session_id={CHECKOUT_SESSION_ID}"
     cancel_url = callback_base_url + f"/payment/stripe/callback?cancelled=1&checkout_id={checkout.id}"
 
     created = await _stripe_create_session(
-        settings.stripe_secret_key, checkout_total(checkout) * 100, "Cart checkout", success_url, cancel_url
+        settings.stripe_secret_key, amount_cents, "Cart checkout", success_url, cancel_url
     )
     if created is None:
         return None
@@ -1188,7 +1323,10 @@ async def submit_manual_payment(order_id: int, payment_method: str, transaction_
         return order
 
 
-async def approve_manual_payment(bot: Bot, order_id: int) -> Order:
+async def approve_manual_payment(bot: Bot, order_id: int) -> tuple[Order | None, bool]:
+    """Returns (order, changed) — changed is False when the order wasn't
+    pending (already approved, fulfilled or rejected), so nothing happened
+    and the caller mustn't claim it was approved."""
     async with async_session_maker() as session:
         # Atomic guard — the owner double-tapping "✅ Confirm" before its
         # keyboard is removed (handle_order_approve in bot/runtime.py) could
@@ -1198,22 +1336,25 @@ async def approve_manual_payment(bot: Bot, order_id: int) -> Order:
         )
         await session.commit()
         if result.rowcount == 0:
-            return await get_order(order_id)
+            return await get_order(order_id), False
 
     order_snapshot = await get_order(order_id)
     await fulfill_order(bot, order_snapshot)
     # fulfill_order updates status/invoice_number on its own session, so
     # order_snapshot is stale (still "paid") — re-fetch for the caller.
-    return await get_order(order_id)
+    return await get_order(order_id), True
 
 
-async def reject_manual_payment(order_id: int) -> None:
+async def reject_manual_payment(order_id: int) -> bool:
+    """Rejects a still-pending order. Returns False (and changes nothing)
+    if it was already paid/fulfilled/rejected — a stale "❌ Reject" tap must
+    never flip an order that was already approved and delivered."""
     async with async_session_maker() as session:
-        result = await session.execute(select(Order).where(Order.id == order_id))
-        order = result.scalar_one_or_none()
-        if order is not None:
-            order.status = "rejected"
-            await session.commit()
+        result = await session.execute(
+            update(Order).where(Order.id == order_id, Order.status == "pending").values(status="rejected")
+        )
+        await session.commit()
+        return result.rowcount > 0
 
 
 # --- Checkout-scoped mirrors of the manual-payment trio above (card-to-card/
@@ -1231,7 +1372,7 @@ async def submit_manual_checkout_payment(checkout_id: int, payment_method: str, 
         return checkout
 
 
-async def approve_manual_checkout(bot: Bot, checkout_id: int) -> Checkout:
+async def approve_manual_checkout(bot: Bot, checkout_id: int) -> tuple[Checkout | None, bool]:
     async with async_session_maker() as session:
         # Same double-tap guard as approve_manual_payment above.
         result = await session.execute(
@@ -1241,56 +1382,115 @@ async def approve_manual_checkout(bot: Bot, checkout_id: int) -> Checkout:
         )
         await session.commit()
         if result.rowcount == 0:
-            return await get_checkout(checkout_id)
+            return await get_checkout(checkout_id), False
 
     checkout_snapshot = await get_checkout(checkout_id)
     await fulfill_checkout(bot, checkout_snapshot)
-    return await get_checkout(checkout_id)
+    return await get_checkout(checkout_id), True
 
 
-async def reject_manual_checkout(checkout_id: int) -> None:
+async def reject_manual_checkout(checkout_id: int) -> bool:
+    """Same pending-only guard as reject_manual_payment."""
     async with async_session_maker() as session:
-        result = await session.execute(select(Checkout).where(Checkout.id == checkout_id))
-        checkout = result.scalar_one_or_none()
-        if checkout is not None:
-            checkout.status = "rejected"
-            await session.commit()
+        result = await session.execute(
+            update(Checkout)
+            .where(Checkout.id == checkout_id, Checkout.status == "pending")
+            .values(status="rejected")
+        )
+        await session.execute(
+            update(Order)
+            .where(Order.checkout_id == checkout_id, Order.status == "pending")
+            .values(status="rejected")
+        )
+        await session.commit()
+        return result.rowcount > 0
+
+
+def _clip(value: str | None, limit: int) -> str:
+    return (value or "").strip()[:limit]
 
 
 async def save_shipping_info(
-    order_id: int, method: str, name: str, phone: str, address: str, postal_code: str = ""
-) -> Order:
+    order_id: int,
+    method: str,
+    name: str,
+    phone: str,
+    address: str,
+    postal_code: str = "",
+    *,
+    bot_id: uuid.UUID | None = None,
+    buyer_telegram_id: int | None = None,
+) -> Order | None:
+    """Stores shipping info on a PAID order that doesn't have any yet, and
+    returns it — or None if the order isn't eligible (not paid, already has
+    shipping info, or isn't this buyer's/bot's). A single atomic UPDATE, so
+    the shipping wizard can never be used to fulfill an unpaid order, to
+    overwrite someone else's address, or to re-run fulfillment by finishing
+    the wizard a second time from an old button."""
+    conditions = [Order.id == order_id, Order.status == "paid", Order.shipping_address.is_(None)]
+    if bot_id is not None:
+        conditions.append(Order.bot_id == bot_id)
+    if buyer_telegram_id is not None:
+        conditions.append(Order.buyer_telegram_id == buyer_telegram_id)
     async with async_session_maker() as session:
-        result = await session.execute(select(Order).where(Order.id == order_id))
-        order = result.scalar_one()
-        order.shipping_method = method
-        order.shipping_name = name
-        order.shipping_phone = phone
-        order.shipping_address = address
-        order.shipping_postal_code = postal_code
+        result = await session.execute(
+            update(Order)
+            .where(*conditions)
+            .values(
+                shipping_method=_clip(method, 50),
+                shipping_name=_clip(name, 200),
+                shipping_phone=_clip(phone, 30),
+                shipping_address=_clip(address, 4000),
+                shipping_postal_code=_clip(postal_code, 20),
+            )
+        )
         await session.commit()
-        await session.refresh(order)
-        return order
+        if result.rowcount == 0:
+            return None
+    return await get_order(order_id)
 
 
 async def save_checkout_shipping_info(
-    checkout_id: int, method: str, name: str, phone: str, address: str, postal_code: str = ""
-) -> Checkout:
+    checkout_id: int,
+    method: str,
+    name: str,
+    phone: str,
+    address: str,
+    postal_code: str = "",
+    *,
+    bot_id: uuid.UUID | None = None,
+    buyer_telegram_id: int | None = None,
+) -> Checkout | None:
     """Checkout-scoped mirror of save_shipping_info above — collected ONCE
     for every physical item in the cart (bot/runtime.py's shipc_info: wizard),
     instead of once per item, so fulfill_checkout can issue one combined
-    invoice. Copied onto each linked Order by fulfill_checkout itself."""
+    invoice. Copied onto each linked Order by fulfill_checkout itself. Same
+    atomic paid-and-not-yet-shipped guard."""
+    conditions = [
+        Checkout.id == checkout_id,
+        Checkout.status == "paid",
+        Checkout.shipping_address.is_(None),
+    ]
+    if bot_id is not None:
+        conditions.append(Checkout.bot_id == bot_id)
+    if buyer_telegram_id is not None:
+        conditions.append(Checkout.buyer_telegram_id == buyer_telegram_id)
     async with async_session_maker() as session:
-        result = await session.execute(select(Checkout).where(Checkout.id == checkout_id))
-        checkout = result.scalar_one()
-        checkout.shipping_method = method
-        checkout.shipping_name = name
-        checkout.shipping_phone = phone
-        checkout.shipping_address = address
-        checkout.shipping_postal_code = postal_code
+        result = await session.execute(
+            update(Checkout)
+            .where(*conditions)
+            .values(
+                shipping_method=_clip(method, 50),
+                shipping_name=_clip(name, 200),
+                shipping_phone=_clip(phone, 30),
+                shipping_address=_clip(address, 4000),
+                shipping_postal_code=_clip(postal_code, 20),
+            )
+        )
         await session.commit()
-        await session.refresh(checkout)
-        return checkout
+        if result.rowcount == 0:
+            return None
+    return await get_checkout(checkout_id)
 
 
 async def get_orders_for_checkout(checkout_id: int) -> list[Order]:
@@ -1310,17 +1510,79 @@ def _checkout_invoice_number(checkout: Checkout) -> str:
     return f"{checkout.bot_id.hex[:6].upper()}-C{checkout.id:06d}"
 
 
-async def _decrement_stock(product_id: int) -> None:
-    """Atomic conditional decrement (bot/inventory.py's enforcement point) —
-    the WHERE guards against two concurrent fulfillments taking stock below
-    0, and against decrementing a product whose stock isn't tracked (NULL)."""
+OUT_OF_STOCK_ERROR = "out of stock after payment"
+
+
+async def _reserve_stock(order_id: int, product_id: int) -> bool:
+    """Takes this order's unit out of Product.stock_quantity, exactly once
+    per order (Order.stock_reserved), at the moment payment is confirmed —
+    bot/inventory.py's enforcement point. Returns False if the product's
+    tracked stock is already 0 (someone else's payment confirmed first).
+
+    The flag and the decrement commit together or not at all: the order
+    flag is claimed with a conditional UPDATE (so two concurrent runs can't
+    both decrement), and the stock decrement is conditional on stock > 0
+    (so it can never go negative); if the latter matches no row the whole
+    transaction is rolled back. Untracked stock (NULL) always succeeds."""
     async with async_session_maker() as session:
-        await session.execute(
+        claimed = await session.execute(
+            update(Order)
+            .where(Order.id == order_id, Order.stock_reserved.is_(False))
+            .values(stock_reserved=True)
+        )
+        if claimed.rowcount == 0:
+            await session.rollback()
+            return True  # already reserved by an earlier/concurrent run
+
+        tracked = (
+            await session.execute(select(Product.stock_quantity).where(Product.id == product_id))
+        ).scalar_one_or_none()
+        if tracked is None:
+            await session.commit()
+            return True
+
+        decremented = await session.execute(
             update(Product)
-            .where(Product.id == product_id, Product.stock_quantity.isnot(None), Product.stock_quantity > 0)
+            .where(Product.id == product_id, Product.stock_quantity > 0)
             .values(stock_quantity=Product.stock_quantity - 1)
         )
+        if decremented.rowcount == 0:
+            await session.rollback()
+            return False
         await session.commit()
+        return True
+
+
+async def _handle_out_of_stock(bot: Bot, order: Order, product: Product) -> None:
+    """Payment went through but the last unit was sold to someone else in
+    the meantime. Never deliver/ship something that isn't there: flag the
+    order (it stays "paid", not "fulfilled") and tell both sides so the
+    owner can refund or restock and ship by hand."""
+    async with async_session_maker() as session:
+        await session.execute(
+            update(Order).where(Order.id == order.id).values(fulfillment_error=OUT_OF_STOCK_ERROR)
+        )
+        await session.commit()
+    try:
+        await bot.send_message(
+            order.buyer_telegram_id,
+            f"✅ Payment received for \"{product.name}\", but it sold out just before your payment "
+            "was confirmed. The seller has been notified and will contact you about a refund "
+            "or delivery.",
+        )
+    except Exception:
+        logger.warning("Failed to tell buyer about out-of-stock order %s", order.id)
+    owner_telegram_id = await _get_owner_telegram_id(order.bot_id)
+    if owner_telegram_id is not None:
+        try:
+            await bot.send_message(
+                owner_telegram_id,
+                f"⚠️ Order #{order.id} (\"{product.name}\") was paid, but the product was already "
+                f"out of stock. Buyer: {order.buyer_telegram_id}. Please refund them, or restock "
+                "and deliver it manually.",
+            )
+        except Exception:
+            logger.warning("Failed to tell owner about out-of-stock order %s", order.id)
 
 
 # --- Alternate "digital" delivery: pre-loaded item pool, or a live API call
@@ -1601,11 +1863,20 @@ async def _finalize_fulfillment(bot: Bot, order: Order, send_invoice: bool = Tru
     falls through to, also reused by retry_delivery below on a successful
     retry."""
     async with async_session_maker() as session:
+        # Only a "paid" order becomes "fulfilled" — and only once: if two
+        # runs ever raced here, the loser matches no row and sends no
+        # second invoice.
+        claimed = await session.execute(
+            update(Order)
+            .where(Order.id == order.id, Order.status == "paid")
+            .values(status="fulfilled", fulfillment_error=None)
+        )
+        if claimed.rowcount == 0:
+            await session.rollback()
+            return
         result = await session.execute(select(Order).where(Order.id == order.id))
         row = result.scalar_one()
-        row.status = "fulfilled"
         row.invoice_number = row.invoice_number or _invoice_number(row)
-        row.fulfillment_error = None
         await session.commit()
         await session.refresh(row)
         order = row
@@ -1653,8 +1924,21 @@ async def fulfill_order(bot: Bot, order: Order, send_invoice: bool = True) -> No
     send_invoice=False is used only by fulfill_checkout below: a cart item
     still fulfills (delivers/ships) independently here, but the PDF itself
     is issued ONCE, combined, by fulfill_checkout — not per item."""
+    # Always work from the database's current state, never the caller's
+    # possibly-stale object — and never fulfill anything that isn't paid
+    # (pending/rejected) or was already fulfilled (a re-run must not
+    # deliver twice).
+    order = await get_order(order.id)
+    if order is None or order.status != "paid":
+        return
     product = await get_product(order.product_id)
     if product is None:
+        return
+    if order.fulfillment_error == OUT_OF_STOCK_ERROR:
+        return  # already reported to buyer and owner; the owner resolves it by hand
+
+    if not await _reserve_stock(order.id, product.id):
+        await _handle_out_of_stock(bot, order, product)
         return
 
     if product.product_type == "physical" and not order.shipping_address:
@@ -1672,8 +1956,6 @@ async def fulfill_order(bot: Bot, order: Order, send_invoice: bool = True) -> No
             ),
         )
         return
-
-    await _decrement_stock(product.id)
 
     if product.product_type == "digital":
         delivered = await _deliver_digital_product(bot, order, product)
@@ -1771,33 +2053,50 @@ async def fulfill_order(bot: Bot, order: Order, send_invoice: bool = True) -> No
 
 
 async def fulfill_checkout(bot: Bot, checkout: Checkout) -> None:
-    """Marks the checkout AND every linked Order paid. If any linked item is
-    physical and the checkout doesn't have shipping info yet, collects it
-    ONCE for the whole checkout (bot/runtime.py's shipc_info: wizard) instead
-    of once per item, and returns — resuming (this function runs again) when
-    that wizard finishes. Once shipping is settled (or wasn't needed), copies
-    it onto every physical Order under this checkout, fulfills each Order's
-    own delivery/shipping message via fulfill_order (send_invoice=False —
-    each item still delivers independently, per its own product_type,
-    exactly like a direct purchase), then issues ONE combined invoice PDF
-    covering every item, instead of one per item."""
-    async with async_session_maker() as session:
-        result = await session.execute(select(Checkout).where(Checkout.id == checkout.id))
-        row = result.scalar_one()
-        row.status = "paid"
-        await session.commit()
-        await session.refresh(row)
-        checkout = row
+    """Fulfills a PAID checkout (every caller flips it pending->paid
+    atomically first — the gateway verify functions and
+    approve_manual_checkout — or re-runs it after the shipping wizard).
+    Marks its still-pending Orders paid and reserves their stock. If any
+    linked item is physical and the checkout doesn't have shipping info
+    yet, collects it ONCE for the whole checkout (bot/runtime.py's
+    shipc_info: wizard) instead of once per item, and returns — resuming
+    (this function runs again) when that wizard finishes. Once shipping is
+    settled (or wasn't needed), copies it onto every physical Order under
+    this checkout, fulfills each Order's own delivery/shipping message via
+    fulfill_order (send_invoice=False — each item still delivers
+    independently, per its own product_type, exactly like a direct
+    purchase), then issues ONE combined invoice PDF covering every item,
+    instead of one per item.
+
+    Never turns an unpaid checkout into a paid one, and safe to run again:
+    already-fulfilled orders are skipped by fulfill_order, and the combined
+    invoice is claimed atomically so it's only ever sent once."""
+    checkout = await get_checkout(checkout.id)
+    if checkout is None or checkout.status != "paid":
+        return
 
     async with async_session_maker() as session:
-        result = await session.execute(select(Order).where(Order.checkout_id == checkout.id))
-        orders = list(result.scalars())
-        for order in orders:
-            order.status = "paid"
+        await session.execute(
+            update(Order)
+            .where(Order.checkout_id == checkout.id, Order.status == "pending")
+            .values(status="paid")
+        )
         await session.commit()
 
-    products = [await get_product(o.product_id) for o in orders]
-    needs_shipping = any(p is not None and p.product_type == "physical" for p in products)
+    orders = await get_orders_for_checkout(checkout.id)
+    products = {o.product_id: await get_product(o.product_id) for o in orders}
+
+    # Reserve stock now, at payment time — before the shipping wizard,
+    # which may take the buyer a while — so nobody else can buy the same
+    # last unit in between.
+    for order in orders:
+        product = products.get(order.product_id)
+        if product is None or order.status != "paid" or order.fulfillment_error == OUT_OF_STOCK_ERROR:
+            continue
+        if not await _reserve_stock(order.id, product.id):
+            await _handle_out_of_stock(bot, order, product)
+
+    needs_shipping = any(p is not None and p.product_type == "physical" for p in products.values())
 
     if needs_shipping and not checkout.shipping_address:
         await bot.send_message(
@@ -1833,18 +2132,20 @@ async def fulfill_checkout(bot: Bot, checkout: Checkout) -> None:
                 )
             )
             await session.commit()
-        orders = await get_orders_for_checkout(checkout.id)
 
-    for order in orders:
+    for order in await get_orders_for_checkout(checkout.id):
         await fulfill_order(bot, order, send_invoice=False)
 
     async with async_session_maker() as session:
-        result = await session.execute(select(Checkout).where(Checkout.id == checkout.id))
-        row = result.scalar_one()
-        row.invoice_number = row.invoice_number or _checkout_invoice_number(row)
+        claimed = await session.execute(
+            update(Checkout)
+            .where(Checkout.id == checkout.id, Checkout.invoice_number.is_(None))
+            .values(invoice_number=_checkout_invoice_number(checkout))
+        )
         await session.commit()
-        await session.refresh(row)
-        checkout = row
+        if claimed.rowcount == 0:
+            return  # combined invoice was already issued by an earlier run
+    checkout = await get_checkout(checkout.id)
 
     orders = await get_orders_for_checkout(checkout.id)
     invoice_pdf = await generate_checkout_invoice(checkout, orders)

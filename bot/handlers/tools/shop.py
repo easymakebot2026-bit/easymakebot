@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from openpyxl import load_workbook
 from sqlalchemy import select
 
@@ -42,7 +42,6 @@ from bot.keyboards import (
     shop_product_type_keyboard,
     shop_products_keyboard,
     shop_skip_keyboard,
-    shop_tax_toggle_text,
     shop_tax_toggle_texts_all,
     tool_button_texts,
 )
@@ -662,14 +661,22 @@ async def delete_product(callback: CallbackQuery, state: FSMContext) -> None:
     data = await state.get_data()
     bot_id = data.get("active_bot_id")
 
-    async with async_session_maker() as session:
-        result = await session.execute(select(Product).where(Product.id == product_id))
-        product = result.scalar_one_or_none()
-        if product is not None and str(product.bot_id) == str(bot_id):
-            await session.delete(product)
-            await session.commit()
+    outcome = await shop.delete_or_archive_product(bot_id, product_id)
+    if outcome is None:
+        text = "محصول پیدا نشد." if is_fa else "Product not found."
+        await callback.answer(text, show_alert=True)
+        return
 
-    text = "محصول حذف شد ✅" if is_fa else "Product deleted ✅"
+    if outcome == "archived":
+        text = (
+            "محصول حذف شد ✅ (چون سفارش داشته، سابقه‌ی سفارش‌ها و فاکتورهاش نگه داشته می‌شه، "
+            "ولی دیگه به خریدارها نشون داده نمی‌شه.)"
+            if is_fa
+            else "Product deleted ✅ (it has past orders, so their history and invoices are kept, "
+            "but it's no longer shown to buyers.)"
+        )
+    else:
+        text = "محصول حذف شد ✅" if is_fa else "Product deleted ✅"
     await callback.message.answer(text)
     await _send_menu(callback.message, bot_id, is_fa)
     await callback.answer()
@@ -861,8 +868,47 @@ async def receive_stripe_key(message: Message, state: FSMContext) -> None:
     bot_id = data.get("active_bot_id")
 
     await _upsert_shop_settings(bot_id, stripe_secret_key=(message.text or "").strip())
+    await state.set_state(ShopStates.waiting_for_stripe_rate)
+    text = (
+        "کلید استرایپ ذخیره شد ✅\n\n"
+        "قیمت محصولاتت به تومانه ولی استرایپ به دلار شارژ می‌کنه. هر ۱ دلار چند تومنه؟ "
+        "(مثلاً 90000). مبلغ پرداخت استرایپ با همین نرخ حساب می‌شه.\n"
+        "اگه قیمت‌هات رو از اول به دلار وارد کردی، 0 بفرست."
+        if is_fa
+        else "Stripe key saved ✅\n\n"
+        "Your prices are in Toman, but Stripe charges in US dollars. How many Toman is 1 USD? "
+        "(e.g. 90000). Stripe charges are converted at this rate.\n"
+        "If you entered your prices in US dollars to begin with, send 0."
+    )
+    await message.answer(text, reply_markup=shop_input_cancel_keyboard(is_fa))
+
+
+@router.message(ShopStates.waiting_for_stripe_rate)
+async def receive_stripe_rate(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    data = await state.get_data()
+    bot_id = data.get("active_bot_id")
+
+    raw = (message.text or "").strip().replace(",", "")
+    raw = raw.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))
+    if not raw.isdigit():
+        text = "فقط یه عدد بفرست (مثلاً 90000، یا 0)." if is_fa else "Please send just a number (e.g. 90000, or 0)."
+        await message.answer(text, reply_markup=shop_input_cancel_keyboard(is_fa))
+        return
+
+    rate = int(raw) or None
+    await _upsert_shop_settings(bot_id, stripe_toman_per_usd=rate)
     await state.set_state(None)
-    text = "کلید استرایپ ذخیره شد ✅" if is_fa else "Stripe key saved ✅"
+    if rate:
+        text = f"نرخ ذخیره شد ✅ (هر ۱ دلار = {rate:,} تومان)" if is_fa else f"Rate saved ✅ (1 USD = {rate:,} Toman)"
+    else:
+        text = (
+            "ذخیره شد ✅ — قیمت‌ها برای استرایپ دلاری در نظر گرفته می‌شن. توجه: تا وقتی زرین‌پال یا "
+            "کارت‌به‌کارت هم فعاله، بدون نرخ، استرایپ به خریدار نشون داده نمی‌شه."
+            if is_fa
+            else "Saved ✅ — prices are treated as US dollars for Stripe. Note: while Zarinpal or "
+            "card-to-card is also enabled, Stripe isn't shown to buyers without a rate."
+        )
     await message.answer(text)
     await _send_menu(message, bot_id, is_fa)
 

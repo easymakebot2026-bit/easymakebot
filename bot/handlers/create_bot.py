@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -6,10 +8,11 @@ from sqlalchemy import select
 
 from bot import help_text
 from bot.config import load_config
-from bot.db.base import async_session_maker
+from bot.db.base import async_session_maker, telegram_bot_id_from_token
 from bot.db.models import BuiltBot, User
 from bot.guide import owner_prefers_persian
 from bot.keyboards import CREATE_BOT_BUTTON_TEXTS, cancel_reply_keyboard, tools_reply_keyboard, webapp_keyboard
+from bot.runtime import start_built_bot, stop_built_bot
 from bot.session import make_session
 from bot.states import CreateBotStates
 
@@ -40,7 +43,15 @@ async def cmd_new_bot(message: Message, state: FSMContext) -> None:
 @router.message(CreateBotStates.waiting_for_token)
 async def receive_token(message: Message, state: FSMContext) -> None:
     is_fa = await owner_prefers_persian(message.from_user)
-    token = message.text.strip()
+    token = (message.text or "").strip()
+    if not token:
+        text = (
+            "توکن رو به‌صورت متن بفرست (همونی که @BotFather داده)."
+            if is_fa
+            else "Please send the token as text (the one @BotFather gave you)."
+        )
+        await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+        return
 
     temp_bot = None
     try:
@@ -68,9 +79,50 @@ async def receive_token(message: Message, state: FSMContext) -> None:
             session.add(user)
             await session.flush()
 
+        # The same Telegram bot must never be registered twice: two BuiltBot
+        # rows on one token would poll against each other (Telegram only
+        # allows one getUpdates consumer), and re-registering would hand the
+        # bot a fresh free trial. The owner re-sending their own bot (e.g.
+        # after revoking the token in @BotFather) just updates its token.
+        telegram_bot_id = bot_info.id or telegram_bot_id_from_token(token)
+        existing_result = await session.execute(
+            select(BuiltBot).where(BuiltBot.telegram_bot_id == telegram_bot_id)
+        )
+        existing = existing_result.scalars().first()
+        if existing is not None and existing.owner_id != user.id:
+            await session.rollback()
+            text = (
+                "این ربات قبلاً توسط یه حساب دیگه ثبت شده. اگه ربات مال توئه، با پشتیبانی تماس بگیر."
+                if is_fa
+                else "This bot is already registered by another account. If it's yours, please contact support."
+            )
+            await message.answer(text, reply_markup=cancel_reply_keyboard(is_fa))
+            return
+
+        if existing is not None:
+            existing.token = token
+            existing.bot_username = bot_info.username or existing.bot_username
+            await session.commit()
+            await session.refresh(existing)
+            await state.clear()
+            await state.update_data(active_bot_id=str(existing.id))
+            text = (
+                f"ربات «{existing.display_name}» قبلاً ثبت شده بود — توکنش به‌روز شد ✅"
+                if is_fa
+                else f"Bot \"{existing.display_name}\" was already registered — its token has been updated ✅"
+            )
+            await message.answer(text, reply_markup=tools_reply_keyboard(is_fa))
+            if existing.live_until is not None:
+                # A running polling task still holds the old (revoked) token.
+                stop_built_bot(existing.id)
+                if not existing.suspended and existing.live_until > datetime.now(timezone.utc):
+                    start_built_bot(existing.id, existing.token)
+            return
+
         built_bot = BuiltBot(
             owner_id=user.id,
             token=token,
+            telegram_bot_id=telegram_bot_id,
             bot_username=bot_info.username or "",
             display_name=bot_info.full_name or bot_info.username or "Unnamed",
         )

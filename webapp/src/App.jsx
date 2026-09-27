@@ -12,7 +12,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import './App.css'
-import { nodeTypes, BLOCK_DEFS } from './nodes.jsx'
+import { nodeTypes, BLOCK_DEFS, COMMAND_NAME_RE, normalizeCommand } from './nodes.jsx'
 import { NodeActionsContext } from './FlowContext.js'
 import Palette from './Palette.jsx'
 import ContentManager from './ContentManager.jsx'
@@ -111,6 +111,15 @@ function Canvas() {
   )
 
   const handleSave = useCallback(async () => {
+    const badTrigger = nodes.find(
+      (n) => n.type === 'trigger' && !COMMAND_NAME_RE.test(normalizeCommand(n.data?.command))
+    )
+    if (badTrigger) {
+      setStatus(
+        `Invalid command "${badTrigger.data?.command || ''}" — use / plus lowercase English letters, digits or _ (max 32).`
+      )
+      return
+    }
     setStatus('Saving…')
     try {
       await saveFlow({

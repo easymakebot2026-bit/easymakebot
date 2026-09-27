@@ -35,6 +35,14 @@ function NodeCard({ id, accent, title, children, showTarget = true, showSource =
   )
 }
 
+// Telegram's own rule for bot commands — mirrored by bot/message_buttons.py.
+export const COMMAND_NAME_RE = /^\/[a-z0-9_]{1,32}$/
+
+export function normalizeCommand(raw) {
+  const cmd = (raw || '').trim().toLowerCase()
+  return cmd && !cmd.startsWith('/') ? `/${cmd}` : cmd
+}
+
 export function TriggerNode({ id, data }) {
   const { updateNodeData } = useContext(NodeActionsContext)
   return (
@@ -43,9 +51,11 @@ export function TriggerNode({ id, data }) {
         className="nodrag flow-node-input"
         placeholder="/start"
         value={data.command || ''}
-        onChange={(e) => updateNodeData(id, { command: e.target.value })}
+        onChange={(e) => updateNodeData(id, { command: e.target.value.toLowerCase() })}
       />
-      <div className="flow-node-hint">Any command, e.g. /start, /menu, /help</div>
+      <div className="flow-node-hint">
+        Lowercase English letters, digits and _ only, e.g. /start, /menu, /help
+      </div>
     </NodeCard>
   )
 }
