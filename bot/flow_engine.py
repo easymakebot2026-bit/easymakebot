@@ -360,13 +360,22 @@ async def _send_message_block(message: Message, block: dict[str, Any]) -> None:
     losing the whole command's reply (this can happen if an owner deletes
     the source message a file_id was minted from, or on rare Telegram-side
     file expiry)."""
-    text = _personalize((block.get("text") or "").strip(), message.from_user)
+    if not isinstance(block, dict):
+        return  # malformed item (the Visual Builder saves without validating)
+    text = _personalize(str(block.get("text") or "").strip(), message.from_user)
     media_type = block.get("media_type")
     # file_id (chat wizard, minted per-bot at upload time) or a plain URL
     # (Visual Builder's simpler field — passed straight to Telegram, whose
     # own servers fetch it, so this never makes an outbound request from our
     # server) — whichever is present; file_id wins if both are set.
     media_source = block.get("media_file_id") or block.get("media_url")
+    if media_source is not None and not isinstance(media_source, str):
+        media_source = None
+    # Telegram's limits — over them the send fails outright.
+    if media_type in ("photo", "video", "document") and media_source:
+        text = text[:1024]
+    else:
+        text = text[:4096]
 
     try:
         # Built inside the try: the Visual Builder saves button data with no
@@ -386,7 +395,11 @@ async def _send_message_block(message: Message, block: dict[str, Any]) -> None:
     except Exception:
         logger.warning("Failed to send message block (media_type=%s); falling back to text-only", media_type)
         if text:
-            await message.answer(text)
+            try:
+                await message.answer(text)
+            except Exception:
+                # Never abort the rest of a multi-message sequence.
+                logger.warning("Text-only fallback failed too; skipping this message block")
 
 
 async def _execute_node(
@@ -404,7 +417,7 @@ async def _execute_node(
     module docstring for the two callers and how a pause gets resumed."""
     if node_type in ("send_message", "message"):
         messages = data.get("messages")
-        if not messages:
+        if not isinstance(messages, list) or not messages:
             # Older/simpler shape: a single implicit message. Covers both
             # pre-this-feature stored data and a bare {"text": "..."} node.
             messages = [{"text": data.get("text") or ""}]
@@ -484,8 +497,9 @@ async def run_flow(
             break
         visited.add(node_id)
 
+        data = node.get("data")
         stop = await _execute_node(
-            bot, bot_id, node.get("type"), node.get("data", {}), message, state,
+            bot, bot_id, node.get("type"), data if isinstance(data, dict) else {}, message, state,
             {"resume_flow_command": command},
         )
         if stop:

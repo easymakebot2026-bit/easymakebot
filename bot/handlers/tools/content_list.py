@@ -2,12 +2,13 @@ import logging
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from sqlalchemy import select
 
 from bot import commerce_mode, help_text, shop
 from bot.content_import import SAMPLE_LANGUAGES, generate_sample_excel, parse_content_excel
 from bot.content_nav import (
+    delete_item_rows,
     folder_ids_among,
     get_all_items,
     get_children,
@@ -59,6 +60,7 @@ from bot.keyboards import (
     product_type_button_to_key,
     tool_button_texts,
 )
+from bot.message_buttons import is_valid_button_url
 from bot.runtime import sync_bot_commands
 from bot.session import make_session
 from bot.shop import TYPE_FIELDS, type_field_prompt
@@ -107,6 +109,20 @@ def _field_prompt(field: dict, is_fa: bool) -> str:
 # Same fields as Add, minus "code" — editing never changes an item's code
 # (or its parent — see the dedicated Group flow for that).
 EDIT_ITEM_FIELDS = [f for f in ADD_ITEM_FIELDS if f["key"] != "code"]
+
+
+def _url_field_error(key: str, text: str, is_fa: bool) -> str | None:
+    """image_url/link_url must be a plain http(s) link — one bad link button
+    makes Telegram reject the whole content post, so it never shows up."""
+    if key in ("image_url", "link_url") and text and not is_valid_button_url(text):
+        return (
+            "این لینک معتبر نیست — باید با http:// یا https:// شروع بشه و فاصله نداشته باشه. "
+            "دوباره بفرست، یا رد کن."
+            if is_fa
+            else "That link isn't valid — it must start with http:// or https:// and contain no spaces. "
+            "Send it again, or skip."
+        )
+    return None
 
 PRODUCT_TYPE_BUTTON_TO_KEY = product_type_button_to_key()
 
@@ -470,7 +486,7 @@ async def delete_item(callback: CallbackQuery, state: FSMContext) -> None:
         result = await session.execute(select(ContentItem).where(ContentItem.id == item_id))
         item = result.scalar_one_or_none()
         if item is not None and str(item.bot_id) == str(bot_id):
-            await session.delete(item)
+            await delete_item_rows(session, item)
             await session.commit()
 
     await sync_bot_commands(bot_id)
@@ -612,6 +628,11 @@ async def wizard_receive(message: Message, state: FSMContext) -> None:
             err,
             reply_markup=content_input_cancel_keyboard(is_fa),
         )
+        return
+
+    url_error = _url_field_error(field["key"], text, is_fa)
+    if url_error:
+        await message.answer(url_error, reply_markup=content_skip_keyboard(is_fa))
         return
 
     if field["key"] == "code" and text:
@@ -1025,6 +1046,11 @@ async def edit_wizard_receive(message: Message, state: FSMContext) -> None:
         )
         return
 
+    url_error = _url_field_error(field["key"], text, is_fa)
+    if url_error:
+        await message.answer(url_error, reply_markup=content_input_cancel_keyboard(is_fa))
+        return
+
     payload[field["key"]] = text or None
     await state.update_data(wizard_payload=payload)
     await _send_edit_step(message, state, index + 1, is_fa)
@@ -1161,7 +1187,16 @@ async def receive_excel(message: Message, state: FSMContext, bot: Bot) -> None:
                 )
                 victim = result.scalar_one_or_none()
                 if victim is not None:
-                    await session.delete(victim)
+                    await delete_item_rows(session, victim)
+                    await session.flush()
+                    # Keep the in-memory maps in step: promoted children now
+                    # point at the victim's parent, and the victim is gone.
+                    for child_id, pid in list(parent_map.items()):
+                        if pid == victim.id:
+                            parent_map[child_id] = victim.parent_id
+                    parent_map.pop(victim.id, None)
+                    title_to_id = {t: i for t, i in title_to_id.items() if i != victim.id}
+                    code_to_id.pop(row["code"], None)
                     deleted_count += 1
                 continue
 

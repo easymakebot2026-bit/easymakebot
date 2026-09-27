@@ -340,17 +340,25 @@ async def approve_ton_live_payment(payment_id: int) -> LivePayment | None:
     return payment
 
 
-async def reject_ton_live_payment(payment_id: int) -> None:
+async def reject_ton_live_payment(payment_id: int) -> bool:
+    """Rejects a still-pending TON payment. Returns False (changing nothing,
+    notifying nobody) if it was already approved or rejected — a stale
+    "Reject" tap must not flip a payment whose bot was already activated."""
     async with async_session_maker() as session:
-        result = await session.execute(select(LivePayment).where(LivePayment.id == payment_id))
-        payment = result.scalar_one_or_none()
-        if payment is not None:
-            payment.status = "rejected"
-            await session.commit()
+        result = await session.execute(
+            update(LivePayment)
+            .where(LivePayment.id == payment_id, LivePayment.status == "pending")
+            .values(status="rejected")
+        )
+        await session.commit()
+        if result.rowcount == 0:
+            return False
 
+    payment = await get_live_payment(payment_id)
     if payment is not None:
         await _notify_owner(
             payment.bot_id,
             "❌ Your TON payment could not be confirmed. Please contact support.",
             "❌ پرداخت TON تو تأیید نشد. با پشتیبانی تماس بگیر.",
         )
+    return True

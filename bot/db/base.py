@@ -320,3 +320,46 @@ async def init_db() -> None:
         await conn.execute(
             text("ALTER TABLE cart_items ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1")
         )
+        # Bug-fix pass: duplicate-bot guard, archived (soft-deleted) products,
+        # stock reserved at payment time, and a Toman->USD rate for Stripe —
+        # see each column's docstring in bot/db/models.py.
+        await conn.execute(
+            text("ALTER TABLE built_bots ADD COLUMN IF NOT EXISTS telegram_bot_id BIGINT")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_built_bots_telegram_bot_id ON built_bots (telegram_bot_id)")
+        )
+        await conn.execute(
+            text("ALTER TABLE products ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT false")
+        )
+        await conn.execute(
+            text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS stock_reserved BOOLEAN NOT NULL DEFAULT false")
+        )
+        await conn.execute(
+            text("ALTER TABLE shop_settings ADD COLUMN IF NOT EXISTS stripe_toman_per_usd INTEGER")
+        )
+
+    await _backfill_telegram_bot_ids()
+
+
+async def _backfill_telegram_bot_ids() -> None:
+    """Fills built_bots.telegram_bot_id for rows created before that column
+    existed. The token is encrypted (random IV), so this can't be done in
+    SQL — it's decrypted row by row here. Cheap: only rows still NULL."""
+    from sqlalchemy import select
+
+    from bot.db.models import BuiltBot
+
+    async with async_session_maker() as session:
+        result = await session.execute(select(BuiltBot).where(BuiltBot.telegram_bot_id.is_(None)))
+        rows = list(result.scalars())
+        for row in rows:
+            row.telegram_bot_id = telegram_bot_id_from_token(row.token)
+        if rows:
+            await session.commit()
+
+
+def telegram_bot_id_from_token(token: str | None) -> int | None:
+    """The numeric bot id Telegram embeds before the ":" in every bot token."""
+    head = (token or "").split(":", 1)[0].strip()
+    return int(head) if head.isdigit() else None

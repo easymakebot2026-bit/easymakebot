@@ -3,16 +3,18 @@ frontend (webapp/dist/) and a small JSON API to read/save a bot's
 flow_definition, authenticated via Telegram initData (bot/webapp_auth.py)."""
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from aiohttp import web
 from sqlalchemy import func, select
 
-from bot.content_nav import get_item, reparent_item, upsert_item
+from bot.content_nav import delete_item_rows, get_item, reparent_item, upsert_item
 from bot.db.base import async_session_maker
 from bot.db.models import BuiltBot, ContentItem, User
 from bot.platform_billing import verify_stripe_live_payment, verify_zarinpal_live_payment
+from bot.message_buttons import is_valid_button_url, is_valid_command_name
 from bot.runtime import sync_bot_commands
 from bot.shop import (
     verify_stripe_checkout,
@@ -35,12 +37,13 @@ async def _authenticated_bot(request: web.Request, bot_token: str) -> BuiltBot |
         return None
 
     user = validate_init_data(init_data, bot_token)
-    if user is None:
+    if user is None or not isinstance(user, dict) or not isinstance(user.get("id"), int):
         return None
 
-    bot_id = request.query.get("bot_id")
-    if not bot_id:
-        return None
+    try:
+        bot_id = uuid.UUID(request.query.get("bot_id") or "")
+    except ValueError:
+        return None  # malformed id — a clean 401, not a DB error / 500
 
     async with async_session_maker() as session:
         result = await session.execute(
@@ -189,8 +192,30 @@ def create_app(bot_token: str) -> web.Application:
         except ValueError:
             return web.json_response({"error": "invalid json"}, status=400)
 
-        if not isinstance(flow, dict) or "nodes" not in flow or "edges" not in flow:
+        if (
+            not isinstance(flow, dict)
+            or not isinstance(flow.get("nodes"), list)
+            or not isinstance(flow.get("edges"), list)
+            or not all(isinstance(n, dict) for n in flow["nodes"])
+            or not all(isinstance(e, dict) for e in flow["edges"])
+        ):
             return web.json_response({"error": "flow must have nodes and edges"}, status=400)
+
+        for node in flow["nodes"]:
+            if node.get("type") != "trigger":
+                continue
+            data = node.get("data") if isinstance(node.get("data"), dict) else {}
+            command = str(data.get("command") or "").strip().lower()
+            if command and not command.startswith("/"):
+                command = "/" + command
+            if not is_valid_command_name(command):
+                return web.json_response(
+                    {
+                        "error": f'invalid command "{data.get("command") or ""}" — use / plus lowercase '
+                        "English letters, digits or _ (max 32)"
+                    },
+                    status=400,
+                )
 
         async with async_session_maker() as session:
             result = await session.execute(select(BuiltBot).where(BuiltBot.id == built_bot.id))
@@ -219,6 +244,21 @@ def create_app(bot_token: str) -> web.Application:
             # bot/premium_content.py.
             "unlock_price": item.unlock_price,
         }
+
+    def _link_error(payload: dict) -> str | None:
+        """A link/image that isn't a plain http(s) URL makes Telegram reject
+        the whole content post it's attached to, so it's refused up front."""
+        for key in ("link_url", "image_url"):
+            value = payload.get(key)
+            if value not in (None, "") and not is_valid_button_url(str(value)):
+                return f"{key} must be an http:// or https:// link without spaces"
+        return None
+
+    def _parse_item_id(request: web.Request) -> int | None:
+        try:
+            return int(request.match_info["item_id"])
+        except (KeyError, ValueError):
+            return None
 
     def _premium_fields(payload: dict) -> dict:
         """Pull is_premium / unlock_price out of a content payload, coerced."""
@@ -261,8 +301,11 @@ def create_app(bot_token: str) -> web.Application:
         except ValueError:
             return web.json_response({"error": "invalid json"}, status=400)
 
-        if not isinstance(payload, dict) or not (payload.get("title") or "").strip():
+        if not isinstance(payload, dict) or not str(payload.get("title") or "").strip():
             return web.json_response({"error": "title is required"}, status=400)
+        link_error = _link_error(payload)
+        if link_error:
+            return web.json_response({"error": link_error}, status=400)
 
         code = (payload.get("code") or "").strip() or None
         if code:
@@ -291,6 +334,8 @@ def create_app(bot_token: str) -> web.Application:
         )
 
         parent_id = payload.get("parent_id")
+        if parent_id is not None and (not isinstance(parent_id, int) or isinstance(parent_id, bool)):
+            return web.json_response({"error": "parent_id must be an integer or null"}, status=400)
         if parent_id is not None:
             ok = await reparent_item(built_bot.id, item.id, parent_id)
             if not ok:
@@ -307,7 +352,9 @@ def create_app(bot_token: str) -> web.Application:
         if built_bot is None:
             return web.json_response({"error": "unauthorized"}, status=401)
 
-        item_id = int(request.match_info["item_id"])
+        item_id = _parse_item_id(request)
+        if item_id is None:
+            return web.json_response({"error": "not found"}, status=404)
 
         async with async_session_maker() as session:
             result = await session.execute(
@@ -325,6 +372,9 @@ def create_app(bot_token: str) -> web.Application:
             return web.json_response({"error": "invalid json"}, status=400)
         if not isinstance(payload, dict):
             return web.json_response({"error": "invalid body"}, status=400)
+        link_error = _link_error(payload)
+        if link_error:
+            return web.json_response({"error": link_error}, status=400)
 
         fields = {
             key: payload[key]
@@ -336,6 +386,9 @@ def create_app(bot_token: str) -> web.Application:
             item = await upsert_item(built_bot.id, fields, item_id=item_id)
 
         if "parent_id" in payload:
+            new_parent = payload["parent_id"]
+            if new_parent is not None and (not isinstance(new_parent, int) or isinstance(new_parent, bool)):
+                return web.json_response({"error": "parent_id must be an integer or null"}, status=400)
             ok = await reparent_item(built_bot.id, item_id, payload["parent_id"])
             if not ok:
                 return web.json_response(
@@ -351,7 +404,9 @@ def create_app(bot_token: str) -> web.Application:
         if built_bot is None:
             return web.json_response({"error": "unauthorized"}, status=401)
 
-        item_id = int(request.match_info["item_id"])
+        item_id = _parse_item_id(request)
+        if item_id is None:
+            return web.json_response({"error": "not found"}, status=404)
 
         async with async_session_maker() as session:
             result = await session.execute(
@@ -371,7 +426,7 @@ def create_app(bot_token: str) -> web.Application:
                     {"error": "has sub-items — delete those first"}, status=409
                 )
 
-            await session.delete(item)
+            await delete_item_rows(session, item)
             await session.commit()
 
         await sync_bot_commands(built_bot.id)

@@ -43,7 +43,11 @@ async def get_subscription_plans(bot_id: uuid.UUID) -> list[Product]:
     async with async_session_maker() as session:
         result = await session.execute(
             select(Product)
-            .where(Product.bot_id == bot_id, Product.product_type == "subscription")
+            .where(
+                Product.bot_id == bot_id,
+                Product.product_type == "subscription",
+                Product.archived.is_(False),
+            )
             .order_by(Product.id)
         )
         return list(result.scalars())

@@ -444,6 +444,24 @@ add_action( 'rest_api_init', function () {
 	) );
 } );
 
+/**
+ * Passwordless (email-code) sign-in is for shop customers only. A staff
+ * account (anyone who can edit posts or manage the shop/site) must keep
+ * going through the normal password login — otherwise anyone who can read
+ * that inbox, or guesses a code, gets an admin session with no password.
+ */
+function emb_passwordless_allowed( $user ) {
+	if ( ! $user instanceof WP_User ) {
+		return true; // a brand-new customer account
+	}
+	foreach ( array( 'edit_posts', 'manage_woocommerce', 'manage_options', 'list_users' ) as $cap ) {
+		if ( user_can( $user, $cap ) ) {
+			return false;
+		}
+	}
+	return true;
+}
+
 /** en passwordless: create/find the user, email a code. Never leaks existence. */
 function emb_rest_auth_start( WP_REST_Request $req ) {
 	if ( ! emb_rl_ok( 'authstart', 8, 15 * MINUTE_IN_SECONDS ) ) {
@@ -460,6 +478,11 @@ function emb_rest_auth_start( WP_REST_Request $req ) {
 	}
 
 	$user = get_user_by( 'email', $email );
+	if ( $user && ! emb_passwordless_allowed( $user ) ) {
+		// Same response as success, so this doesn't reveal that a staff
+		// account uses this email — but no code is ever sent.
+		return new WP_REST_Response( array( 'ok' => true ), 200 );
+	}
 	if ( $user ) {
 		$uid = $user->ID;
 	} else {
@@ -494,7 +517,7 @@ function emb_rest_auth_verify( WP_REST_Request $req ) {
 	}
 	$email = sanitize_email( (string) $req->get_param( 'email' ) );
 	$user  = $email ? get_user_by( 'email', $email ) : null;
-	if ( ! $user ) {
+	if ( ! $user || ! emb_passwordless_allowed( $user ) ) {
 		return new WP_REST_Response( array( 'ok' => false, 'error' => 'no_pending' ), 200 );
 	}
 	$r = emb_otp_verify( $user->ID, (string) $req->get_param( 'code' ) );

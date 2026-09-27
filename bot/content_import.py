@@ -31,6 +31,8 @@ from io import BytesIO
 
 from openpyxl import Workbook, load_workbook
 
+from bot.message_buttons import is_valid_button_url
+
 # Column header synonyms in every language we ship a sample for (see
 # _SAMPLE_LANGS), matched after normalization against a file's header row so a
 # bot owner's own catalogue works too — not just our generated sample.
@@ -403,6 +405,11 @@ def parse_content_excel(data: bytes, filename: str | None = None) -> list[dict]:
             continue
 
         item["body"] = item["body"] or ""
+        # A malformed link would make Telegram reject the whole post at view
+        # time — drop it rather than import something that can't be shown.
+        for url_key in ("image_url", "link_url"):
+            if item[url_key] and not is_valid_button_url(item[url_key]):
+                item[url_key] = None
         item["category"] = item["category"] or None
         item["code"] = item["code"] or None
         items.append(item)
