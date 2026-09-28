@@ -2,17 +2,19 @@
 frontend (webapp/dist/) and a small JSON API to read/save a bot's
 flow_definition, authenticated via Telegram initData (bot/webapp_auth.py)."""
 
+import hmac
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from aiohttp import web
 from sqlalchemy import func, select
 
+from bot.config import load_config
 from bot.content_nav import delete_item_rows, get_item, reparent_item, upsert_item
 from bot.db.base import async_session_maker
-from bot.db.models import BuiltBot, ContentItem, User
+from bot.db.models import BuiltBot, ContentItem, LivePayment, Order, User
 from bot.platform_billing import verify_stripe_live_payment, verify_zarinpal_live_payment
 from bot.message_buttons import is_valid_button_url, is_valid_command_name
 from bot.runtime import sync_bot_commands
@@ -27,6 +29,10 @@ from bot.webapp_auth import validate_init_data
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "webapp" / "dist"
+
+# Module-level singleton, same pattern as bot/website_client.py — cheap to
+# load once, read only for the static PLATFORM_STATS_API_KEY below.
+_config = load_config()
 
 
 async def _authenticated_bot(request: web.Request, bot_token: str) -> BuiltBot | None:
@@ -432,6 +438,133 @@ def create_app(bot_token: str) -> web.Application:
         await sync_bot_commands(built_bot.id)
         return web.json_response({"ok": True})
 
+    async def platform_stats(request: web.Request) -> web.Response:
+        """Platform-wide aggregate stats — for the business owner's own
+        dashboards/reports (e.g. the scheduled business-check-in), never
+        exposed to bot owners. Not tied to any single bot, so it doesn't use
+        _authenticated_bot; auth is a static key instead, same "X-EMB-Key"
+        header convention bot/website_client.py already uses for the
+        website<->bot API. Read-only, no writes anywhere in this handler.
+        """
+        if not _config.platform_stats_api_key:
+            return web.json_response({"error": "stats_api_disabled"}, status=503)
+        if not hmac.compare_digest(
+            request.headers.get("X-EMB-Key", "").encode(), _config.platform_stats_api_key.encode()
+        ):
+            return web.json_response({"error": "unauthorized"}, status=401)
+
+        now = datetime.now(timezone.utc)
+        since_30d = now - timedelta(days=30)
+        since_7d = now - timedelta(days=7)
+
+        def _rev(row) -> dict[str, float]:
+            return {"toman": int(row[0] or 0), "usd": float(row[1] or 0)}
+
+        async with async_session_maker() as session:
+            users_total = (
+                await session.execute(select(func.count()).select_from(User))
+            ).scalar_one()
+            users_7d = (
+                await session.execute(
+                    select(func.count()).select_from(User).where(User.created_at >= since_7d)
+                )
+            ).scalar_one()
+            users_30d = (
+                await session.execute(
+                    select(func.count()).select_from(User).where(User.created_at >= since_30d)
+                )
+            ).scalar_one()
+
+            bots_total = (
+                await session.execute(select(func.count()).select_from(BuiltBot))
+            ).scalar_one()
+            bots_live = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(BuiltBot)
+                    .where(
+                        BuiltBot.live_until.is_not(None),
+                        BuiltBot.live_until > now,
+                        BuiltBot.suspended.is_(False),
+                    )
+                )
+            ).scalar_one()
+            bots_suspended = (
+                await session.execute(
+                    select(func.count()).select_from(BuiltBot).where(BuiltBot.suspended.is_(True))
+                )
+            ).scalar_one()
+
+            platform_rev_all = (
+                await session.execute(
+                    select(
+                        func.coalesce(
+                            func.sum(LivePayment.price).filter(LivePayment.currency == "toman"), 0
+                        ),
+                        func.coalesce(
+                            func.sum(LivePayment.price).filter(LivePayment.currency == "usd"), 0
+                        ),
+                    ).where(LivePayment.status == "paid")
+                )
+            ).one()
+            platform_rev_30d = (
+                await session.execute(
+                    select(
+                        func.coalesce(
+                            func.sum(LivePayment.price).filter(LivePayment.currency == "toman"), 0
+                        ),
+                        func.coalesce(
+                            func.sum(LivePayment.price).filter(LivePayment.currency == "usd"), 0
+                        ),
+                    ).where(LivePayment.status == "paid", LivePayment.created_at >= since_30d)
+                )
+            ).one()
+
+            paid_statuses = ("paid", "fulfilled")
+            shop_orders_total = (
+                await session.execute(
+                    select(func.count()).select_from(Order).where(Order.status.in_(paid_statuses))
+                )
+            ).scalar_one()
+            # All end-customer shop revenue is Toman-only (Product.price is
+            # always Toman — see db/models.py) — never mix it with the
+            # platform's own usd LivePayment revenue above.
+            shop_revenue_all = (
+                await session.execute(
+                    select(
+                        func.coalesce(
+                            func.sum(Order.price + func.coalesce(Order.tax_amount, 0)), 0
+                        )
+                    ).where(Order.status.in_(paid_statuses))
+                )
+            ).scalar_one()
+            shop_revenue_30d = (
+                await session.execute(
+                    select(
+                        func.coalesce(
+                            func.sum(Order.price + func.coalesce(Order.tax_amount, 0)), 0
+                        )
+                    ).where(Order.status.in_(paid_statuses), Order.created_at >= since_30d)
+                )
+            ).scalar_one()
+
+        return web.json_response(
+            {
+                "generated_at": now.isoformat(),
+                "users": {"total": users_total, "new_7d": users_7d, "new_30d": users_30d},
+                "bots": {"total": bots_total, "live": bots_live, "suspended": bots_suspended},
+                "platform_revenue": {
+                    "all_time": _rev(platform_rev_all),
+                    "last_30d": _rev(platform_rev_30d),
+                },
+                "end_customer_shops": {
+                    "orders_total": shop_orders_total,
+                    "revenue_toman_all_time": int(shop_revenue_all),
+                    "revenue_toman_30d": int(shop_revenue_30d),
+                },
+            }
+        )
+
     async def index(request: web.Request) -> web.Response:
         index_path = STATIC_DIR / "index.html"
         if not index_path.exists():
@@ -453,6 +586,7 @@ def create_app(bot_token: str) -> web.Application:
     app.router.add_post("/api/content", create_content)
     app.router.add_put("/api/content/{item_id}", update_content)
     app.router.add_delete("/api/content/{item_id}", delete_content)
+    app.router.add_get("/api/platform/stats", platform_stats)
     async def favicon(request: web.Request) -> web.Response:
         path = STATIC_DIR / "favicon.svg"
         if not path.exists():

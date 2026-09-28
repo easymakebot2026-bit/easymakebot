@@ -94,13 +94,24 @@ CREATE_BOT_BUTTON_TEXTS = frozenset(
 CREATE_BOT_BUTTON_TEXT = create_bot_button_text(False)
 
 
+def my_account_button_text(is_fa: bool = False) -> str:
+    return "💳 اشتراک من" if is_fa else "💳 My Subscription"
+
+
+MY_ACCOUNT_BUTTON_TEXTS = frozenset(
+    {my_account_button_text(False), my_account_button_text(True)}
+)
+MY_ACCOUNT_BUTTON_TEXT = my_account_button_text(False)
+
+
 def welcome_keyboard(is_fa: bool = False) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [
                 KeyboardButton(text=my_bots_button_text(is_fa)),
                 KeyboardButton(text=create_bot_button_text(is_fa)),
-            ]
+            ],
+            [KeyboardButton(text=my_account_button_text(is_fa))],
         ],
         resize_keyboard=True,
     )
@@ -853,17 +864,19 @@ def shop_menu_static_texts_all() -> dict[str, frozenset[str]]:
     }
 
 
-def shop_menu_keyboard(mode: str = "shop", is_fa: bool = False) -> ReplyKeyboardMarkup:
+def shop_menu_keyboard(mode: str = "shop", is_fa: bool = False, settings=None) -> ReplyKeyboardMarkup:
     products_labels = shop_products_button_texts(is_fa)
     add_labels = shop_add_button_texts(is_fa)
     products_label = products_labels.get(mode, products_labels["shop"])
     add_label = add_labels.get(mode, add_labels["shop"])
     static = shop_menu_static_texts(is_fa)
+    my_account_enabled = bool(settings and settings.my_account_enabled)
     rows = [
         [KeyboardButton(text=products_label), KeyboardButton(text=add_label)],
         [KeyboardButton(text=static["payments"]), KeyboardButton(text=static["orders"])],
         [KeyboardButton(text=static["import"]), KeyboardButton(text=static["stats"])],
         [KeyboardButton(text=static["invoice"])],
+        [KeyboardButton(text=shop_my_account_toggle_text(my_account_enabled, is_fa))],
     ]
     if mode == "subscription":
         rows.append(
@@ -966,6 +979,25 @@ def shop_tax_toggle_text(enabled: bool, is_fa: bool = False) -> str:
     if is_fa:
         return "✅ مالیات ۱۰٪ فعاله (لمس کن غیرفعال شه)" if enabled else "☑️ فعال‌سازی مالیات بر ارزش‌افزوده ۱۰٪"
     return "✅ 10% VAT is ON (tap to turn off)" if enabled else "☑️ Enable 10% VAT"
+
+
+def shop_my_account_toggle_text(enabled: bool, is_fa: bool = False) -> str:
+    if is_fa:
+        return "✅ «حساب من» برای مشتری‌ها فعاله (لمس کن غیرفعال شه)" if enabled else "☑️ فعال‌سازی «حساب من» برای مشتری‌ها"
+    return "✅ \"My Account\" is ON for buyers (tap to turn off)" if enabled else "☑️ Enable \"My Account\" for buyers"
+
+
+def shop_my_account_toggle_texts_all() -> frozenset[str]:
+    """Every label the My-Account toggle button could ever show — both
+    states, both languages — same reasoning as shop_tax_toggle_texts_all."""
+    return frozenset(
+        {
+            shop_my_account_toggle_text(True, False),
+            shop_my_account_toggle_text(False, False),
+            shop_my_account_toggle_text(True, True),
+            shop_my_account_toggle_text(False, True),
+        }
+    )
 
 
 def shop_tax_toggle_texts_all() -> frozenset[str]:

@@ -38,6 +38,8 @@ easymakebot/
 ├── webapp/src/             # فرانت‌اند React — بوم Visual Flow Builder (Telegram Mini App)
 ├── web/                    # سایت وردپرس/ووکامرس (سمت ایران) — مستقل از bot/
 │   ├── wordpress/wp-content/mu-plugins/emb-activation-codes.php   # پل بین سایت و ربات
+│   ├── wordpress/wp-content/mu-plugins/emb-zarinpal-proxy.php     # پراکسی زرین‌پال (تفصیل در CODE_04)
+│   ├── wordpress/wp-content/mu-plugins/emb-bot-verify.php         # پل ثبت‌نام+تأیید (تفصیل در CODE_04)
 │   └── docs/               # چک‌لیست و runbook دیپلوی سایت (از قبل نوشته شده)
 ├── deploy/                 # Docker Compose + Caddy برای دیپلوی خودِ ربات (سرور آلمان)
 │   ├── docker-compose.bot.yml         # استک production (bot-db + bot + caddy)
@@ -302,6 +304,7 @@ docker restart easymakebot-bot
 | `db/encrypted_types.py` | تایپ‌های رمزنگاری‌شده |
 | `handlers/start.py` | `/start`, `/help` |
 | `handlers/my_bots.py` | `/mybots`, انتخاب ربات |
+| `handlers/my_account.py` | `/myaccount`, «💳 اشتراک من» — خلاصهٔ وضعیت لایو همهٔ بات‌های مالک |
 | `handlers/create_bot.py` | `/newbot` |
 | `handlers/cancel.py` | `/cancel` سراسری |
 | `handlers/tools_menu.py` | منوی «Build & Edit Tools» |

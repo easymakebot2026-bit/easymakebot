@@ -42,6 +42,20 @@ class User(Base):
     # creating a new one can't farm another free 72h window.
     trial_used: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
+    # Identity verification on the marketing website (web/wordpress/wp-
+    # content/mu-plugins/emb-accounts.php + emb-bot-verify.php), required
+    # before a Zarinpal (Iran) or TON (international) /live plan payment —
+    # see bot/handlers/live.py:_ensure_site_verified. A local cache of the
+    # site's `emb_verified` user-meta flag: once true it's never rechecked
+    # over the network again (WordPress never un-verifies someone), so a
+    # returning owner isn't asked to re-verify on every purchase.
+    site_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # The email collected/confirmed during that verification (international
+    # owners only give an email — no phone; Iranian owners' phone is already
+    # in phone_number above). Kept so a later payment can re-check status by
+    # email without asking again. Encrypted like phone_number.
+    site_email: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -349,6 +363,14 @@ class BotSubscriber(Base):
     # clears this back to False (re-engaging the bot implies opting back in).
     muted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
+    # Website identity verification cache for the flow-builder "verify_gate"
+    # node (bot/flow_engine.py) — same bridge/meaning as User.site_verified/
+    # site_email above, just for a BUILT bot's own end customer instead of a
+    # platform bot-creator. Off unless the bot owner adds that node to their
+    # own flow.
+    site_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    site_email: Mapped[str | None] = mapped_column(EncryptedString, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -609,6 +631,12 @@ class ShopSettings(Base):
     # flipping this later never changes an invoice already issued or a
     # payment already in flight.
     tax_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+    # Buyer-facing "My Account" screen (bot/shop.py:get_account_summary,
+    # bot/runtime.py's /account handler) — display-only (membership date,
+    # order count, lifetime spend), off by default; each bot owner turns it
+    # on for their own bot (bot/handlers/tools/shop.py:toggle_my_account).
+    my_account_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     bot: Mapped["BuiltBot"] = relationship(back_populates="shop_settings")
 

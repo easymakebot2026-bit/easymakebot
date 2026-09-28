@@ -523,3 +523,20 @@
 - `bot/db/encrypted_types.py` توسط `bot/db/models.py` برای ستون‌های حساس (`token`, `phone_number`, `zarinpal_merchant_id`, `card_number`, `stripe_secret_key`, `crypto_wallet_address`, `ton_wallet_address`, `flow_definition`, `payload`, `text` در `BroadcastLog`) استفاده می‌شود.
 - `bot/db/models.py` توسط تقریباً همه‌ی ماژول‌های منطقی پروژه (`bot/shop.py`, `bot/runtime.py`, `bot/premium_content.py`, `bot/inventory.py`, `bot/content_nav.py`, `bot/platform_billing.py`, `bot/admin_panel.py`, `bot/commerce_mode.py`, `bot/live.py`, `bot/guide.py` و غیره) به‌عنوان تعریف اسکیمای مشترک import می‌شود.
 - `bot/shop.py` به `bot/pricing.py` (محاسبه‌ی قیمت تعدیل‌شده‌ی کمپین و فرمت نمایش)، `bot/session.py` (ساخت `AiohttpSession` برای نمونه‌ی موقت `Bot`)، و `bot/db/base.py`/`bot/db/models.py` وابسته است، و خودش توسط `bot/runtime.py` و `bot/webapp_server.py` مصرف می‌شود.
+
+---
+
+## به‌روزرسانی: صفحه‌ی «حساب من» برای مشتری‌های ربات‌های ساخته‌شده (اختیاری، به انتخاب هر مالک)
+
+### `shop_settings.my_account_enabled BOOLEAN DEFAULT false`
+سوییچ روشن/خاموش، یک ردیف به‌ازای هر ربات — پیش‌فرض خاموش. مالک هر ربات از منوی اصلی ابزار Shop (`bot/handlers/tools/shop.py:toggle_my_account`، دکمه‌ی «☑️ فعال‌سازی «حساب من» برای مشتری‌ها» کنار سایر تنظیمات) خودش تصمیم می‌گیرد این قابلیت برای مشتری‌های همون رباتش نشون داده بشه یا نه. با تغییر این سوییچ، `sync_bot_commands` بلافاصله دوباره صدا زده می‌شه تا دستور `/account` همون لحظه به منوی «/» ربات (برای همه) اضافه/حذف بشه.
+
+### `async def get_account_summary(bot_id, telegram_id) -> dict | None` — `bot/shop.py`
+- **چه‌کار می‌کند:** داده‌ی نمایشیِ صفحه‌ی «حساب من» یک مشترک را برمی‌گرداند: `member_since` (از `BotSubscriber.created_at`)، `order_count`، و مجموع خریدهای موفق در دو سبد جدا — `toman_total` و `usd_total`. اگر این تلگرام‌آیدی هیچ‌وقت `/start` این ربات را نزده باشد (ردیف `BotSubscriber` وجود ندارد)، `None` برمی‌گرداند.
+- **«کردیت» یعنی چی:** این پلتفرم هیچ کیف‌پول/موجودی اعتباری واقعی ندارد — عدد نمایش داده‌شده صرفاً **مجموع تاریخیِ خریدهای موفق** (`status` در `("paid", "fulfilled")` برای سفارش‌های مستقیم، `status == "paid"` برای Checkoutها) است، بدون هیچ برداشت/افزایش واقعی. کاملاً نمایشی.
+- **چرا دو ارز جدا، نه یک عدد جمع‌شده:** یک سفارش با `payment_method == "stripe"` دلاریه، بقیه‌ی روش‌ها (زرین‌پال، کارت‌به‌کارت، TON/کریپتو) تومانی‌ان؛ جمع زدن این دو با هم دقیقاً همون باگی می‌شد که قبلاً یک‌بار در آمار درآمد پلتفرم (`bot/admin_panel.py`) پیدا و رفع شده بود.
+- **چرا دو کوئری جدا (سفارش مستقیم + Checkout)، نه جمع زدن `Order.tax_amount` روی همه‌ی ردیف‌ها:** مالیات یک Checkout فقط **یک‌بار** روی خودِ `Checkout.tax_amount` snapshot می‌شود (نه روی هر `Order` که از آن fan-out شده — `Order`های داخل یک Checkout مقدار `tax_amount`شان خالی می‌ماند)؛ همون تکنیکی که `list_buyer_orders` (بالاتر در همین فایل) از قبل استفاده می‌کند، اینجا هم عیناً تکرار شده تا مالیات سفارش‌های چندآیتمی دوبار حساب یا گم نشود.
+- یک Checkout دقیقاً معادل «یک سفارش» شمرده می‌شود (نه یک عدد به‌ازای هر آیتم داخلش) — هم‌راستا با `list_buyer_orders` و صفحه‌ی `/orders`.
+
+### `@dp.message(CommandFilter("account"))` — `bot/runtime.py`
+دستور بیلت‌این `/account` (مثل `/cart`/`/orders`)، ولی برخلاف آن‌ها که با «آیا محصولی هست؟» گیت می‌شوند، این یکی صرفاً با `ShopSettings.my_account_enabled` گیت شده و اگر مالک روشنش نکرده باشد، حتی اگر کاربر مستقیم `/account` را تایپ کند (نه از منوی «/»)، هندلر دوباره خودش این فلگ را چک می‌کند و بی‌صدا خارج می‌شود. متن خروجی: تاریخ عضویت، تعداد سفارش‌ها، و مجموع خرید (با `bot/pricing.py:format_price`، تومان و/یا دلار جدا اگر هرکدام غیرصفر باشد).

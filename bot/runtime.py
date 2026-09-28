@@ -24,7 +24,7 @@ from aiogram.types import (
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from bot import premium_content, pricing, shop
+from bot import premium_content, pricing, shop, website_client
 from bot.config import load_config
 from bot.content_nav import (
     get_children,
@@ -38,7 +38,10 @@ from bot.db.base import async_session_maker
 from bot.db.models import BotPost, BotSubscriber, BroadcastLog, BuiltBot, Command, PostComment, PostLike, User
 from bot.flow_engine import (
     _execute_node,
+    _mark_subscriber_verified,
     _normalize_command,
+    _run_verify_gate,
+    _verify_gate_code_prompt,
     build_content_children_view,
     build_shop_categories_view,
     build_shop_list_view,
@@ -61,6 +64,7 @@ from bot.states import (
     PostCommentStates,
     ShopOrderStates,
     SubscriberOnboardingStates,
+    SubscriberVerifyStates,
 )
 
 logger = logging.getLogger(__name__)
@@ -230,6 +234,7 @@ _COMMAND_DESCRIPTIONS = {
     "content": "Browse content",
     "cart": "View your cart",
     "orders": "View your orders",
+    "account": "Your account",
     "help": "Show help",
     "stop": "Stop broadcast messages",
 }
@@ -287,6 +292,15 @@ async def sync_bot_commands(bot_id: uuid.UUID) -> None:
         # manually. A flow/legacy "/orders" trigger the owner defines
         # themselves still wins (setdefault), same as /content and /cart.
         kinds.setdefault("/orders", "orders")
+
+    # Built-in "My Account" command — unlike /content, /cart and /orders
+    # (auto-offered whenever there's something to browse/buy), this one is
+    # opt-in per bot: only shown once the owner has turned it on for their
+    # own bot (bot/handlers/tools/shop.py:toggle_my_account). A custom
+    # "/account" the owner defines themselves still wins (setdefault).
+    account_settings = await shop.get_shop_settings(bot_id)
+    if account_settings and account_settings.my_account_enabled:
+        kinds.setdefault("/account", "account")
 
     # Built-in help command — always offered (unlike /content, /cart and
     # /orders, which only make sense once there's something to browse/buy),
@@ -454,6 +468,13 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         PostCommentStates.waiting_for_comment,
         SubscriberOnboardingStates.waiting_for_phone,
         BuiltBotBroadcastStates.waiting_for_message,
+        # verify_gate wizard steps. waiting_for_code is deliberately NOT
+        # here: it has its own /resend command handler further down.
+        SubscriberVerifyStates.waiting_for_phone,
+        SubscriberVerifyStates.waiting_for_first_name,
+        SubscriberVerifyStates.waiting_for_last_name,
+        SubscriberVerifyStates.waiting_for_address,
+        SubscriberVerifyStates.waiting_for_email,
     )
     _input_state_names = {st.state for st in _input_states}
 
@@ -1830,6 +1851,49 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         is_fa = await _end_user_prefers_persian(message.from_user)
         await send_order_status(bot_id, message, is_fa)
 
+    @dp.message(CommandFilter("account"))
+    async def handle_account_command(message: Message) -> None:
+        """"My Account" — display-only membership date, order count, and
+        lifetime spend (see bot/shop.py:get_account_summary for what
+        "credit" means here — NOT a real wallet balance). Opt-in per bot
+        (ShopSettings.my_account_enabled) even though sync_bot_commands
+        already keeps the "/" menu entry hidden when it's off — this handler
+        re-checks the same flag itself, since a menu entry is only ever a
+        suggestion and someone could still type /account by hand."""
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        settings = await shop.get_shop_settings(bot_id)
+        if not (settings and settings.my_account_enabled):
+            return
+        summary = await shop.get_account_summary(bot_id, message.from_user.id)
+        if summary is None:
+            text = "اول باید /start رو بزنی." if is_fa else "Send /start first."
+            await message.answer(text)
+            return
+
+        spend_lines = []
+        if summary["toman_total"]:
+            spend_lines.append(pricing.format_price(summary["toman_total"]))
+        if summary["usd_total"]:
+            spend_lines.append(pricing.format_price(summary["usd_total"], currency="USD"))
+        spend_text = " + ".join(spend_lines) if spend_lines else ("۰ تومان" if is_fa else "0 Toman")
+
+        member_since = f"{summary['member_since']:%Y-%m-%d}"
+        if is_fa:
+            text = (
+                f"👤 حساب من\n\n"
+                f"📅 تاریخ عضویت: {member_since}\n"
+                f"📦 تعداد سفارش‌ها: {summary['order_count']}\n"
+                f"💳 مجموع خریدهای موفق: {spend_text}"
+            )
+        else:
+            text = (
+                f"👤 My Account\n\n"
+                f"📅 Member since: {member_since}\n"
+                f"📦 Orders: {summary['order_count']}\n"
+                f"💳 Total spent: {spend_text}"
+            )
+        await message.answer(text)
+
     @dp.message(CommandFilter("stop"))
     async def handle_stop_broadcasts(message: Message) -> None:
         """Sets BotSubscriber.muted (bot/db/models.py) so
@@ -2240,6 +2304,235 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             await message.answer(TYPED_PHONE_INVALID, reply_markup=phone_share_keyboard())
             return
         await _save_subscriber_phone_and_resume(message, state, phone, "Thanks! 🙌")
+
+    # --- verify_gate flow node: field-collection wizard + OTP -------------
+    # (bot/flow_engine.py:_run_verify_gate starts this by setting one of the
+    # states below and sending the matching prompt; see that function and
+    # SubscriberVerifyStates for the full picture.)
+
+    async def _resume_after_subscriber_verification(message: Message, state: FSMContext, is_fa: bool) -> None:
+        data = await state.get_data()
+        legacy_command_id = data.get("resume_legacy_command_id")
+        command = data.get("resume_flow_command", "/start")
+        deep_link_payload = data.get("pending_deep_link")
+        await state.clear()
+        text = "✅ هویتت تأیید شد!" if is_fa else "✅ Your identity is verified!"
+        await message.answer(text)
+
+        if legacy_command_id is not None:
+            async with async_session_maker() as session:
+                result = await session.execute(select(Command).where(Command.id == legacy_command_id))
+                legacy_command = result.scalar_one_or_none()
+            if legacy_command is not None and legacy_command.payload:
+                await _execute_node(
+                    bot, bot_id, legacy_command.payload.get("action"), legacy_command.payload,
+                    message, state, {"resume_legacy_command_id": legacy_command.id},
+                )
+            return
+
+        async with async_session_maker() as session:
+            result = await session.execute(select(BuiltBot).where(BuiltBot.id == bot_id))
+            built_bot = result.scalar_one_or_none()
+        if built_bot and built_bot.flow_definition:
+            await run_flow(bot, bot_id, built_bot.flow_definition, command, message, state)
+        if command == "/start" and deep_link_payload:
+            await _send_deep_link_target(message, deep_link_payload)
+
+    async def _save_verify_gate_phone(message: Message, state: FSMContext, phone: str) -> None:
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(BotSubscriber).where(
+                    BotSubscriber.bot_id == bot_id, BotSubscriber.telegram_id == message.from_user.id,
+                )
+            )
+            subscriber = result.scalar_one_or_none()
+            if subscriber is not None:
+                subscriber.phone_number = phone
+                await session.commit()
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        await message.answer("ممنون! 🙌" if is_fa else "Thanks! 🙌", reply_markup=ReplyKeyboardRemove())
+        # Re-enter the SAME gate now that a phone is on file, instead of
+        # assuming "never registered" and marching straight into the field
+        # wizard — this subscriber may already have a VERIFIED account under
+        # this phone (e.g. from an earlier /live verification, or another
+        # bot's verify_gate), in which case /bot-verify/start would later
+        # reject with phone_taken (someone else's phone from the site's
+        # point of view is indistinguishable from "it's actually you, just
+        # under a different record") with no way back. _run_verify_gate
+        # re-checks status first and only falls into the field wizard when
+        # that check says the phone genuinely isn't registered yet.
+        # resume_flow_command/resume_legacy_command_id/pending_deep_link are
+        # already in FSM data (stashed before this pause) — update_data
+        # merges, so passing {} here doesn't disturb them.
+        stopped = await _run_verify_gate(bot_id, {"channel": "sms"}, message, state, {})
+        if not stopped:
+            await _resume_after_subscriber_verification(message, state, is_fa)
+
+    @dp.message(SubscriberVerifyStates.waiting_for_phone, F.contact)
+    async def receive_verify_gate_phone_contact(message: Message, state: FSMContext) -> None:
+        phone = message.contact.phone_number
+        if not phone.startswith("+"):
+            phone = f"+{phone}"
+        await _save_verify_gate_phone(message, state, phone)
+
+    @dp.message(SubscriberVerifyStates.waiting_for_phone, F.text)
+    async def receive_verify_gate_phone_text(message: Message, state: FSMContext) -> None:
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        if (message.text or "").strip() == SKIP_BUTTON_TEXT:
+            # No skip for a verification gate — see SubscriberVerifyStates'
+            # docstring for why this differs from the Guide & Video prompt.
+            text = (
+                "برای این تأیید، شماره لازمه — دکمه‌ی اشتراک‌گذاری رو بزن."
+                if is_fa
+                else "A phone number is required for this verification — please use the share button."
+            )
+            await message.answer(text, reply_markup=phone_share_keyboard())
+            return
+        phone = normalize_typed_phone(message.text)
+        if phone is None:
+            await message.answer(TYPED_PHONE_INVALID, reply_markup=phone_share_keyboard())
+            return
+        await _save_verify_gate_phone(message, state, phone)
+
+    @dp.message(SubscriberVerifyStates.waiting_for_first_name)
+    async def receive_verify_gate_first_name(message: Message, state: FSMContext) -> None:
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        name = (message.text or "").strip()
+        if not name or len(name) > 100:
+            text = "اسمت رو بفرست (حداکثر ۱۰۰ کاراکتر)." if is_fa else "Send your first name (max 100 characters)."
+            await message.answer(text)
+            return
+        await state.update_data(verify_gate_first_name=name)
+        await state.set_state(SubscriberVerifyStates.waiting_for_last_name)
+        text = "حالا فامیلت رو بفرست." if is_fa else "Now send your last name."
+        await message.answer(text)
+
+    @dp.message(SubscriberVerifyStates.waiting_for_last_name)
+    async def receive_verify_gate_last_name(message: Message, state: FSMContext) -> None:
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        name = (message.text or "").strip()
+        if not name or len(name) > 100:
+            text = "فامیلت رو بفرست (حداکثر ۱۰۰ کاراکتر)." if is_fa else "Send your last name (max 100 characters)."
+            await message.answer(text)
+            return
+        await state.update_data(verify_gate_last_name=name)
+        await state.set_state(SubscriberVerifyStates.waiting_for_address)
+        text = "حالا آدرست رو بفرست." if is_fa else "Now send your address."
+        await message.answer(text)
+
+    @dp.message(SubscriberVerifyStates.waiting_for_address)
+    async def receive_verify_gate_address(message: Message, state: FSMContext) -> None:
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        address = (message.text or "").strip()
+        if not address or len(address) > 500:
+            text = "آدرست رو بفرست (حداکثر ۵۰۰ کاراکتر)." if is_fa else "Send your address (max 500 characters)."
+            await message.answer(text)
+            return
+        await state.update_data(verify_gate_address=address)
+        await state.set_state(SubscriberVerifyStates.waiting_for_email)
+        text = "در آخر، ایمیلت رو بفرست." if is_fa else "Finally, send your email."
+        await message.answer(text)
+
+    @dp.message(SubscriberVerifyStates.waiting_for_email)
+    async def receive_verify_gate_email(message: Message, state: FSMContext) -> None:
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        email = (message.text or "").strip()
+        if not (email and 3 <= len(email) <= 254 and "@" in email and "." in email.split("@")[-1]):
+            text = (
+                "این یه ایمیل معتبر به نظر نمی‌رسه. دوباره بفرست."
+                if is_fa
+                else "That doesn't look like a valid email. Please resend it."
+            )
+            await message.answer(text)
+            return
+
+        data = await state.get_data()
+        channel = data.get("verify_gate_channel") or "email"
+        telegram_id = message.from_user.id
+        u = message.from_user
+        phone = None
+
+        if channel == "sms":
+            async with async_session_maker() as session:
+                result = await session.execute(
+                    select(BotSubscriber).where(
+                        BotSubscriber.bot_id == bot_id, BotSubscriber.telegram_id == telegram_id,
+                    )
+                )
+                subscriber = result.scalar_one_or_none()
+            phone = (subscriber.phone_number or "").strip() if subscriber else ""
+            result = await website_client.start_verification(
+                "sms",
+                phone=phone,
+                email=email,
+                first_name=data.get("verify_gate_first_name"),
+                last_name=data.get("verify_gate_last_name"),
+                address=data.get("verify_gate_address"),
+                tos=True,
+                telegram_id=telegram_id,
+                telegram_username=u.username,
+                telegram_first_name=u.first_name,
+            )
+        else:
+            result = await website_client.start_verification(
+                "email",
+                email=email,
+                tos=True,
+                telegram_id=telegram_id,
+                telegram_username=u.username,
+                telegram_first_name=u.first_name,
+            )
+
+        if not result.get("ok"):
+            err = str(result.get("error", "network"))
+            await message.answer(f"❌ {website_client.verify_error_text(is_fa, err)}")
+            return  # stay in this state so they can resend a corrected email
+
+        if result.get("already_verified"):
+            await _mark_subscriber_verified(bot_id, telegram_id, email)
+            await _resume_after_subscriber_verification(message, state, is_fa)
+            return
+
+        await state.update_data(verify_gate_email=email, verify_gate_phone=phone)
+        await state.set_state(SubscriberVerifyStates.waiting_for_code)
+        await message.answer("ممنون! 🙌" if is_fa else "Thanks! 🙌")
+        await message.answer(_verify_gate_code_prompt(is_fa, channel))
+
+    @dp.message(SubscriberVerifyStates.waiting_for_code, CommandFilter("resend"))
+    async def resend_verify_gate_code(message: Message, state: FSMContext) -> None:
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        data = await state.get_data()
+        channel = data.get("verify_gate_channel") or "email"
+        phone = data.get("verify_gate_phone")
+        email = data.get("verify_gate_email")
+        result = await website_client.resend_verification(channel, phone=phone, email=email)
+        if not result.get("ok"):
+            await message.answer(f"❌ {website_client.verify_error_text(is_fa, str(result.get('error', 'network')))}")
+            return
+        if result.get("already_verified"):
+            await _mark_subscriber_verified(bot_id, message.from_user.id, email)
+            await _resume_after_subscriber_verification(message, state, is_fa)
+            return
+        await message.answer("یه کد جدید فرستادیم." if is_fa else "Sent a new code.")
+
+    @dp.message(SubscriberVerifyStates.waiting_for_code)
+    async def receive_verify_gate_code(message: Message, state: FSMContext) -> None:
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        code = (message.text or "").strip()
+        if not code:
+            await message.answer("کد رو بفرست." if is_fa else "Please send the code.")
+            return
+        data = await state.get_data()
+        channel = data.get("verify_gate_channel") or "email"
+        phone = data.get("verify_gate_phone")
+        email = data.get("verify_gate_email")
+        result = await website_client.confirm_verification(channel, code, phone=phone, email=email)
+        if not result.get("ok"):
+            await message.answer(f"❌ {website_client.verify_error_text(is_fa, str(result.get('error', 'mismatch')))}")
+            return  # keep the state so they can retry, or /resend
+
+        await _mark_subscriber_verified(bot_id, message.from_user.id, email)
+        await _resume_after_subscriber_verification(message, state, is_fa)
 
     async def _find_legacy_command(command_token: str) -> Command | None:
         async with async_session_maker() as session:
