@@ -63,8 +63,14 @@ do_deploy() {
   fi
   if [ ! -f "$ENV_FILE" ]; then echo "  [ERROR] $ENV_FILE not found — nothing was changed"; exit 1; fi
   backup_db || exit 1
-  local before
+  local before rollback_tag
   before=$(git rev-parse --short HEAD)
+  # Keep the image that's running now under a second name, so a bad
+  # release can be rolled back in seconds without rebuilding anything.
+  rollback_tag="easymakebot-bot:before-$(date +%F-%H%M)"
+  if $SUDO docker image inspect easymakebot-bot:latest >/dev/null 2>&1; then
+    $SUDO docker tag easymakebot-bot:latest "$rollback_tag" && note "Current image kept as $rollback_tag"
+  fi
   git pull --ff-only || { echo "  [ERROR] git pull failed — nothing else was changed"; exit 1; }
   note "Code: $before -> $(git rev-parse --short HEAD) ($(git log -1 --format=%s))"
   compose up -d --build || { echo "  [ERROR] build/start failed — roll back with: git checkout $before && $0 deploy"; exit 1; }
@@ -73,7 +79,11 @@ do_deploy() {
   local svc ok=""
   svc=$(bot_service)
   for _ in $(seq 1 24); do
-    if compose logs --tail 200 "$svc" 2>/dev/null | grep -q 'Bot is running'; then ok=1; break; fi
+    # Capture first, then match: `logs | grep -q` under `set -o pipefail`
+    # reports failure when grep exits early and `logs` gets SIGPIPE.
+    local recent
+    recent=$(compose logs --tail 200 "$svc" 2>/dev/null)
+    if printf '%s\n' "$recent" | grep -c 'Bot is running' >/dev/null; then ok=1; break; fi
     sleep 5
   done
   if [ -n "$ok" ]; then
@@ -81,7 +91,8 @@ do_deploy() {
   else
     warn "Did not see 'Bot is running' within 2 minutes — last log lines:"
     compose logs --tail 40 "$svc" 2>&1 | redact | sed 's/^/    /'
-    note "To roll back: git checkout $before && $0 deploy   (DB backup is in $BACKUP_DIR)"
+    note "To roll back the running bot: docker tag $rollback_tag easymakebot-bot:latest && (cd $DEPLOY_DIR && docker compose --env-file .env.bot -f docker-compose.bot.yml up -d --no-build bot)"
+    note "Code before this deploy: $before. DB backup: $BACKUP_DIR"
   fi
 }
 
@@ -126,7 +137,13 @@ audit_bot() {
     for k in BOT_TOKEN PLATFORM_ADMIN_ID ENCRYPTION_KEY POSTGRES_PASSWORD APP_DOMAIN WEBAPP_URL WEBSITE_URL WEBSITE_ACTIVATION_KEY; do
       if [ -n "$(env_value "$k")" ]; then note "$k: set"; else warn "$k: NOT set"; fi
     done
-    case "$(env_value PLATFORM_ONBOT_ZARINPAL)" in true|1|yes|on) warn "PLATFORM_ONBOT_ZARINPAL is on — only correct if this server has an Iranian IP";; esac
+    case "$(env_value PLATFORM_ONBOT_ZARINPAL)" in true|1|yes|on)
+      if [ -n "$(env_value ZARINPAL_PROXY_URL)" ]; then
+        note "PLATFORM_ONBOT_ZARINPAL is on, routed through ZARINPAL_PROXY_URL (Iran) — OK"
+      else
+        warn "PLATFORM_ONBOT_ZARINPAL is on without ZARINPAL_PROXY_URL — Zarinpal calls go out from this non-Iranian server"
+      fi;;
+    esac
   fi
   local domain
   domain=$(env_value APP_DOMAIN)
