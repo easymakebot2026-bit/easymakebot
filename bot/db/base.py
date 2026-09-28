@@ -320,6 +320,38 @@ async def init_db() -> None:
         await conn.execute(
             text("ALTER TABLE cart_items ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1")
         )
+
+        # Per-bot toggle for the buyer-facing "My Account" screen (bot/shop.py:
+        # get_account_summary, bot/runtime.py's /account handler) — off by
+        # default, each bot owner turns it on for their own bot from the Shop
+        # tool's main menu (bot/handlers/tools/shop.py:toggle_my_account).
+        await conn.execute(
+            text("ALTER TABLE shop_settings ADD COLUMN IF NOT EXISTS "
+                 "my_account_enabled BOOLEAN NOT NULL DEFAULT false")
+        )
+
+        # Website identity verification cache (bot/db/models.py:User.site_verified/
+        # site_email) — gates /live's Zarinpal/TON plan payments, see
+        # bot/handlers/live.py:_ensure_site_verified.
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS "
+                 "site_verified BOOLEAN NOT NULL DEFAULT false")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS site_email BYTEA")
+        )
+
+        # Same cache, for a BUILT bot's own end customers — flow-builder
+        # "verify_gate" node (bot/flow_engine.py, bot/db/models.py:
+        # BotSubscriber.site_verified/site_email).
+        await conn.execute(
+            text("ALTER TABLE bot_subscribers ADD COLUMN IF NOT EXISTS "
+                 "site_verified BOOLEAN NOT NULL DEFAULT false")
+        )
+        await conn.execute(
+            text("ALTER TABLE bot_subscribers ADD COLUMN IF NOT EXISTS site_email BYTEA")
+        )
+
         # Bug-fix pass: duplicate-bot guard, archived (soft-deleted) products,
         # stock reserved at payment time, and a Toman->USD rate for Stripe —
         # see each column's docstring in bot/db/models.py.

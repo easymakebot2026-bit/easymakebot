@@ -34,8 +34,35 @@ class Config:
     # When the website is in Iran and the bot abroad, the bot must NOT start
     # its own Zarinpal payment for Iran owners (foreign server IP + the buyer's
     # Telegram VPN both fight the gateway) — they buy on the website and redeem
-    # a code instead. Set true only if the bot itself is also on an Iran IP.
+    # a code instead. Set true only if the bot itself is also on an Iran IP,
+    # OR zarinpal_proxy_url below is set (see next field).
     platform_onbot_zarinpal: bool
+    # Optional relay for every Zarinpal call this process makes (both
+    # platform_billing.py's /live plans and shop.py's per-bot shops) —
+    # web/wordpress/wp-content/mu-plugins/emb-zarinpal-proxy.php running on
+    # the Iran website server. When set, _zarinpal_request/_zarinpal_verify
+    # in bot/shop.py POST to {zarinpal_proxy_url}/request and /verify (with
+    # header X-EMB-Key: zarinpal_proxy_key) instead of calling
+    # api.zarinpal.com directly — the outbound call to Zarinpal then
+    # originates from the Iran server's IP even though the bot process runs
+    # in Germany, which is what makes it safe to set
+    # PLATFORM_ONBOT_ZARINPAL=true without the bot itself being on an Iran IP.
+    zarinpal_proxy_url: str | None
+    zarinpal_proxy_key: str | None
+    # Bot-callable bridge to emb-accounts.php's registration + OTP system
+    # (web/wordpress/wp-content/mu-plugins/emb-bot-verify.php) — lets /live
+    # (and, via the flow-builder verification node, any built bot's own
+    # shop) collect the same fields the website collects and verify a code,
+    # for a person who has no account on the website yet. Reuses website_url
+    # above as the base URL; both must be set for the gate to activate —
+    # otherwise it's silently skipped (graceful-omit, same as everything
+    # else website-bridge related).
+    website_verify_key: str | None
+    # Static API key required in the "X-EMB-Key" header to read
+    # GET /api/platform/stats (bot/webapp_server.py) -- the platform-wide
+    # stats endpoint used for the business owner's own dashboards/reports,
+    # never exposed to bot owners. Unset -> the endpoint responds 503.
+    platform_stats_api_key: str | None
 
 
 def load_config() -> Config:
@@ -60,6 +87,10 @@ def load_config() -> Config:
     platform_onbot_zarinpal = (os.getenv("PLATFORM_ONBOT_ZARINPAL") or "").strip().lower() in (
         "1", "true", "yes", "on"
     )
+    zarinpal_proxy_url = (os.getenv("ZARINPAL_PROXY_URL") or "").strip().rstrip("/") or None
+    zarinpal_proxy_key = (os.getenv("ZARINPAL_PROXY_KEY") or "").strip() or None
+    website_verify_key = (os.getenv("WEBSITE_VERIFY_KEY") or "").strip() or None
+    platform_stats_api_key = os.getenv("PLATFORM_STATS_API_KEY") or None
 
     if not bot_token:
         raise ValueError(
@@ -89,4 +120,8 @@ def load_config() -> Config:
         website_plans_url=website_plans_url,
         website_plans_url_en=website_plans_url_en,
         platform_onbot_zarinpal=platform_onbot_zarinpal,
+        zarinpal_proxy_url=zarinpal_proxy_url,
+        zarinpal_proxy_key=zarinpal_proxy_key,
+        website_verify_key=website_verify_key,
+        platform_stats_api_key=platform_stats_api_key,
     )

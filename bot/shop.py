@@ -28,6 +28,7 @@ from reportlab.pdfgen import canvas
 from sqlalchemy import delete, func, select, update
 
 from bot import pricing
+from bot.config import load_config
 from bot.db.base import async_session_maker
 from bot.db.models import (
     BotSubscriber,
@@ -55,6 +56,7 @@ DELIVERY_MODE_POOL = "pool"
 DELIVERY_MODE_API = "api"
 
 logger = logging.getLogger(__name__)
+_config = load_config()
 
 # Zarinpal's v4 REST API. Amounts are Rial (Product.price is stored in Toman,
 # so every amount sent to Zarinpal is multiplied by 10) — this is the
@@ -874,13 +876,35 @@ async def create_checkout(bot_id: uuid.UUID, buyer_telegram_id: int) -> Checkout
         return checkout
 
 
+def _zarinpal_urls() -> tuple[str, str]:
+    """Where to actually send Zarinpal request/verify calls — Zarinpal
+    directly, or (when ZARINPAL_PROXY_URL is set) via
+    emb-zarinpal-proxy.php on the Iran website server, which makes the
+    outbound call to Zarinpal FROM Iran and relays its JSON back unchanged.
+    See bot/config.py:zarinpal_proxy_url for why this exists."""
+    if _config.zarinpal_proxy_url:
+        return (
+            f"{_config.zarinpal_proxy_url}/request",
+            f"{_config.zarinpal_proxy_url}/verify",
+        )
+    return ZARINPAL_REQUEST_URL, ZARINPAL_VERIFY_URL
+
+
+def _zarinpal_headers() -> dict:
+    if _config.zarinpal_proxy_url and _config.zarinpal_proxy_key:
+        return {"X-EMB-Key": _config.zarinpal_proxy_key}
+    return {}
+
+
 async def _zarinpal_request(
     merchant_id: str, amount_rial: int, description: str, callback_url: str
 ) -> str | None:
-    """Calls Zarinpal's payment/request.json. Returns the authority, or None
-    on failure (bad merchant ID, network error, etc.). Shared by the
-    single-Order and Checkout payment flows below — the only place that
-    actually talks to this endpoint."""
+    """Calls Zarinpal's payment/request.json (directly, or via the Iran
+    proxy — see _zarinpal_urls). Returns the authority, or None on failure
+    (bad merchant ID, network error, proxy auth error, etc.). Shared by the
+    single-Order/Checkout payment flows below AND bot/platform_billing.py's
+    /live plans — the only place that actually talks to this endpoint."""
+    request_url, _ = _zarinpal_urls()
     payload = {
         "merchant_id": merchant_id,
         "amount": amount_rial,
@@ -890,11 +914,18 @@ async def _zarinpal_request(
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                ZARINPAL_REQUEST_URL, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+                request_url,
+                json=payload,
+                headers=_zarinpal_headers(),
+                timeout=aiohttp.ClientTimeout(total=20),
             ) as resp:
                 data = await resp.json()
     except Exception:
         logger.exception("Zarinpal payment request failed")
+        return None
+
+    if data.get("ok") is False:
+        logger.warning("Zarinpal proxy request failed: %s", data)
         return None
 
     authority = (data.get("data") or {}).get("authority")
@@ -905,18 +936,27 @@ async def _zarinpal_request(
 
 
 async def _zarinpal_verify(merchant_id: str, amount_rial: int, authority: str) -> dict | None:
-    """Calls Zarinpal's verify.json. Returns its `data` dict on a successful
-    verification (code 100 = verified now, 101 = already verified), else
-    None (network failure, or verification failed/pending)."""
+    """Calls Zarinpal's verify.json (directly, or via the Iran proxy).
+    Returns its `data` dict on a successful verification (code 100 =
+    verified now, 101 = already verified), else None (network failure,
+    proxy auth error, or verification failed/pending)."""
+    _, verify_url = _zarinpal_urls()
     payload = {"merchant_id": merchant_id, "amount": amount_rial, "authority": authority}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                ZARINPAL_VERIFY_URL, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+                verify_url,
+                json=payload,
+                headers=_zarinpal_headers(),
+                timeout=aiohttp.ClientTimeout(total=20),
             ) as resp:
                 data = await resp.json()
     except Exception:
         logger.exception("Zarinpal verify failed")
+        return None
+
+    if data.get("ok") is False:
+        logger.warning("Zarinpal proxy verify failed: %s", data)
         return None
 
     result = data.get("data") or {}
@@ -2616,3 +2656,82 @@ async def list_buyer_orders(bot_id: uuid.UUID, buyer_telegram_id: int, limit: in
 
     entries.sort(key=lambda e: e["date"], reverse=True)
     return entries[:limit]
+
+
+async def get_account_summary(bot_id: uuid.UUID | str, telegram_id: int) -> dict | None:
+    """Buyer-facing "My Account" data for one subscriber of `bot_id` — gated
+    behind ShopSettings.my_account_enabled (bot/runtime.py's /account handler
+    checks that before ever calling this). Returns None if this person has
+    never /start'd the bot (no BotSubscriber row).
+
+    "Credit" here is NOT a real wallet/store-credit balance — this codebase
+    has no such thing. It's a display-only lifetime total of this buyer's
+    successful (paid/fulfilled) purchases, kept in two separate currency
+    buckets (Toman vs USD) rather than one combined number: a Stripe order is
+    USD while every other payment method (Zarinpal, card-to-card, TON/crypto)
+    is Toman, and adding those together would silently mix currencies — the
+    same mistake bot/admin_panel.py's platform-wide revenue stats already had
+    to be fixed for once; see its "Toman/USD currency-mixing" comment.
+
+    Counts a checkout (the cart's combined-payment flow) as ONE order, same
+    as list_buyer_orders above and the /orders screen — not one per line
+    item — and, like that function, uses two separate queries (Order rows
+    with no checkout_id, plus Checkout rows) rather than summing
+    Order.tax_amount across every row, because a checkout's VAT is only ever
+    snapshotted once on the Checkout itself (see create_checkout above) —
+    every Order fanned out from it keeps tax_amount unset, so tax on a
+    multi-item cart purchase would otherwise be undercounted here."""
+    async with async_session_maker() as session:
+        sub_result = await session.execute(
+            select(BotSubscriber).where(
+                BotSubscriber.bot_id == bot_id, BotSubscriber.telegram_id == telegram_id
+            )
+        )
+        subscriber = sub_result.scalar_one_or_none()
+        if subscriber is None:
+            return None
+
+        direct_orders = list(
+            (
+                await session.execute(
+                    select(Order).where(
+                        Order.bot_id == bot_id,
+                        Order.buyer_telegram_id == telegram_id,
+                        Order.checkout_id.is_(None),
+                        Order.status.in_(("paid", "fulfilled")),
+                    )
+                )
+            ).scalars()
+        )
+        paid_checkouts = list(
+            (
+                await session.execute(
+                    select(Checkout).where(
+                        Checkout.bot_id == bot_id,
+                        Checkout.buyer_telegram_id == telegram_id,
+                        Checkout.status == "paid",
+                    )
+                )
+            ).scalars()
+        )
+
+    # With a Toman->USD rate set (stripe_amount_cents), Stripe orders are
+    # priced in Toman like every other method — only a legacy Stripe-only
+    # shop (no rate) stores its prices as whole dollars.
+    settings = await get_shop_settings(bot_id)
+    stripe_is_usd = not (settings and settings.stripe_toman_per_usd)
+
+    def _is_usd(entry) -> bool:
+        return entry.payment_method == "stripe" and stripe_is_usd
+
+    toman_total = sum(order_total(o) for o in direct_orders if not _is_usd(o))
+    toman_total += sum(checkout_total(c) for c in paid_checkouts if not _is_usd(c))
+    usd_total = sum(order_total(o) for o in direct_orders if _is_usd(o))
+    usd_total += sum(checkout_total(c) for c in paid_checkouts if _is_usd(c))
+
+    return {
+        "member_since": subscriber.created_at,
+        "order_count": len(direct_orders) + len(paid_checkouts),
+        "toman_total": toman_total,
+        "usd_total": usd_total,
+    }

@@ -11,6 +11,7 @@ from bot import commerce_mode, help_text, inventory, premium_content, shop, shop
 from bot.db.base import async_session_maker
 from bot.db.models import Product, ShopSettings
 from bot.guide import owner_prefers_persian
+from bot.runtime import sync_bot_commands
 from bot.keyboards import (
     SHOP_ADD_BUTTON_TEXTS_ALL,
     SHOP_BACK_BUTTON_TEXTS,
@@ -36,6 +37,7 @@ from bot.keyboards import (
     shop_invoice_period_keyboard,
     shop_menu_keyboard,
     shop_menu_static_texts_all,
+    shop_my_account_toggle_texts_all,
     shop_payment_button_texts_all,
     shop_payments_keyboard,
     shop_product_detail_keyboard,
@@ -98,6 +100,7 @@ _PAYMENT_TEXTS = shop_payment_button_texts_all()
 _INVOICE_TEXTS = shop_invoice_button_texts_all()
 _MENU_STATIC_TEXTS = shop_menu_static_texts_all()
 _TAX_TOGGLE_TEXTS = shop_tax_toggle_texts_all()
+_MY_ACCOUNT_TOGGLE_TEXTS = shop_my_account_toggle_texts_all()
 
 
 async def _send_menu(message: Message, bot_id: str, is_fa: bool) -> None:
@@ -108,7 +111,10 @@ async def _send_menu(message: Message, bot_id: str, is_fa: bool) -> None:
     else:
         label = "shop" if mode != commerce_mode.MODE_SUBSCRIPTION else "subscription plans"
         text = f"Manage this bot's {label}."
-    await message.answer(text, reply_markup=shop_menu_keyboard(mode or commerce_mode.MODE_SHOP, is_fa))
+    settings = await shop.get_shop_settings(bot_id)
+    await message.answer(
+        text, reply_markup=shop_menu_keyboard(mode or commerce_mode.MODE_SHOP, is_fa, settings)
+    )
 
 
 def _current_fields(phase: str, product_type: str | None) -> list[dict]:
@@ -1183,6 +1189,36 @@ async def toggle_tax(message: Message, state: FSMContext) -> None:
         text = "مالیات بر ارزش‌افزوده غیرفعال شد." if is_fa else "VAT is now OFF."
     await message.answer(text)
     await invoice_settings_menu(message, state)
+
+
+@router.message(F.text.in_(_MY_ACCOUNT_TOGGLE_TEXTS))
+async def toggle_my_account(message: Message, state: FSMContext) -> None:
+    """Per-bot on/off switch for the buyer-facing "My Account" screen
+    (bot/runtime.py's /account handler + bot/shop.py:get_account_summary) —
+    lives on the Shop tool's main menu since it's a general shop setting,
+    not specific to invoicing/payments. Re-syncs this bot's "/" command menu
+    right away so /account appears/disappears for buyers without a restart."""
+    is_fa = await owner_prefers_persian(message.from_user)
+    data = await state.get_data()
+    bot_id = data.get("active_bot_id")
+    settings = await shop.get_shop_settings(bot_id)
+    now_enabled = not bool(settings and settings.my_account_enabled)
+
+    await _upsert_shop_settings(bot_id, my_account_enabled=now_enabled)
+    if now_enabled:
+        text = (
+            "«حساب من» برای مشتری‌ها فعال شد — با دستور /account تاریخ عضویت، تعداد سفارش‌ها و "
+            "مجموع خریدهاشون رو می‌بینن."
+            if is_fa
+            else "\"My Account\" is now ON for buyers — /account shows them their membership "
+            "date, order count, and total spend."
+        )
+    else:
+        text = "«حساب من» برای مشتری‌ها غیرفعال شد." if is_fa else "\"My Account\" is now OFF for buyers."
+    await message.answer(text)
+    if bot_id:
+        await sync_bot_commands(bot_id)
+    await _send_menu(message, bot_id, is_fa)
 
 
 def _invoice_period_since(period: str) -> datetime:

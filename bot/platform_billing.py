@@ -48,8 +48,11 @@ def available_methods_for_region(region: str | None) -> list[str]:
     TON and/or Card (Stripe). An Iranian creator normally has NO on-bot method
     — they buy on the (Iranian) website and redeem a code, because a
     bot-initiated Zarinpal payment from a foreign server, plus the buyer's
-    Telegram VPN, breaks the gateway. Set PLATFORM_ONBOT_ZARINPAL=true only
-    when the bot itself runs on an Iran IP."""
+    Telegram VPN, breaks the gateway. Set PLATFORM_ONBOT_ZARINPAL=true to
+    offer it in-bot to Iran creators too — safe to do even with the bot
+    itself on a foreign IP as long as ZARINPAL_PROXY_URL is also set (see
+    bot/config.py), which routes the actual Zarinpal call through the Iran
+    website server (bot/shop.py:_zarinpal_request/_verify)."""
     if region == "iran":
         if _config.platform_onbot_zarinpal and _config.platform_zarinpal_merchant_id:
             return ["zarinpal"]

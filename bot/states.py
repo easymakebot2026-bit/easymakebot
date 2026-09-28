@@ -100,6 +100,28 @@ class SubscriberOnboardingStates(StatesGroup):
     waiting_for_phone = State()
 
 
+class SubscriberVerifyStates(StatesGroup):
+    """Built-bot side (bot/runtime.py + bot/flow_engine.py's "verify_gate"
+    flow node) — a subscriber's own website-identity verification, gating
+    whatever comes after the node in the owner's flow (typically their shop).
+    Same shape/resume convention as SubscriberOnboardingStates.waiting_for_phone
+    above, just with more steps. channel ("sms"|"email") and which field is
+    still needed are tracked in FSM data, not separate per-channel states,
+    except the field-collection wizard which — like LivePlanStates' verify_*
+    states — asks one question per message."""
+
+    # Only entered for an sms-channel gate with no phone on file yet. Unlike
+    # SubscriberOnboardingStates.waiting_for_phone (the Guide & Video block's
+    # optional share-or-skip step), this one has NO skip — a verification
+    # gate that could be skipped wouldn't gate anything.
+    waiting_for_phone = State()
+    waiting_for_first_name = State()
+    waiting_for_last_name = State()
+    waiting_for_address = State()
+    waiting_for_email = State()
+    waiting_for_code = State()
+
+
 class ShopOrderStates(StatesGroup):
     """Built-bot side (bot/runtime.py) — a buyer's own purchase flow."""
 
@@ -139,4 +161,24 @@ class LivePlanStates(StatesGroup):
     # accountability — see bot/handlers/live.py). The pending code / plan+method
     # is stashed in FSM data.
     waiting_for_activation_code_phone = State()
+    # Phone requested right when /live is opened and no region is known yet
+    # (no phone on file, no self-reported region) — lets us auto-detect
+    # Iran vs. international from the real number's country code instead of
+    # asking the owner to pick manually. Manual pick (live:region:*) still
+    # works at any time and clears this state.
+    waiting_for_region_phone = State()
     waiting_for_plan_payment_phone = State()
+    # Website identity verification gate before a Zarinpal (Iran) or TON
+    # (international) /live plan payment, when the owner has no verified
+    # account on the marketing website yet (bot/handlers/live.py:
+    # _ensure_site_verified, bot/website_client.py verify_* functions).
+    # Iran field-collection wizard, one question at a time (phone is already
+    # on file by this point — see LivePlanStates above):
+    waiting_for_verify_first_name = State()
+    waiting_for_verify_last_name = State()
+    waiting_for_verify_address = State()
+    # Also the ONLY collection step for an international owner (email only —
+    # mirrors the website's own passwordless email flow).
+    waiting_for_verify_email = State()
+    # Shared by both channels — enter the 6-digit code just sent.
+    waiting_for_verify_code = State()

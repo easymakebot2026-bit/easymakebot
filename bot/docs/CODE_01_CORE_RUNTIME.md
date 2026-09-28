@@ -487,3 +487,40 @@ finally:
 ### `async def run_campaign_expiry_loop(interval_seconds: int = 300) -> None`
 - **چه‌کار می‌کند:** حلقه‌ی مشابه بالا، ولی برای کمپین‌های تخفیف قیمت (`bot/shop.py:PriceCampaign`). هر تکرار `shop.expire_due_campaigns()` را صدا می‌زند — این تابع در `bot/shop.py` هر کمپینی که `ends_at`ش گذشته را پیدا کرده، قیمت‌ها را به قیمت پیش از کمپین برمی‌گرداند، و لیست `bot_id` های تحت تأثیر را برمی‌گرداند؛ برای هرکدام یک خط لاگ اطلاعاتی می‌زند. طبق docstring، **برای همه‌ی ربات‌ها** (چه Live چه غیر Live) اجرا می‌شود تا داده‌ی قیمت همیشه صحیح بماند، حتی اگر ربات در آن لحظه polling نداشته باشد. همان الگوی `try/except Exception` + `logger.exception` برای مقاومت در برابر خطای گذرا.
 - **پارامترها:** `interval_seconds` — پیش‌فرض ۳۰۰ ثانیه.
+
+---
+
+## به‌روزرسانی: نود «Verify Identity» در Visual Flow Builder — تأیید هویت مشترک‌های خود هر بات
+
+مکمل بخش «گیت تأیید هویت سایت» در `CODE_04_LIVE_BILLING_ADMIN_WEBAPP.md` (همون پل `emb-bot-verify.php` + `bot/website_client.py` verify_*) — اونجا برای **سازنده‌ی بات** (`/live`) بود، این یکی همون قابلیت رو به‌عنوان یه بلوک قابل‌کشیدن‌ورهاکردن (drag-and-drop) در اختیار **هر مالک بات** می‌ذاره تا برای **مشترک‌های خودش** استفاده کنه — مثلاً درست قبل از بلوک «Shop» بذارتش تا فقط مشتری تأییدشده بتونه خرید کنه.
+
+### نود جدید — `bot/flow_engine.py: verify_gate` + `_run_verify_gate`
+
+نوع نود `verify_gate` با `data: {"channel": "email"|"sms"}` (پیش‌فرض `"email"`). دقیقاً همون منطق دوگیت `force_join_gate`/`guide_video` رو دنبال می‌کنه: `_execute_node` این‌بار `_run_verify_gate` رو صدا می‌زنه که یا `False` برمی‌گردونه (تأیید شده/گیت غیرفعاله → پیمایش فلو ادامه پیدا می‌کنه) یا `True` (متوقف — منتظر مشترک).
+
+منطق داخل `_run_verify_gate`:
+1. اگه `website_client.verify_is_configured()` نبود (یعنی `WEBSITE_VERIFY_KEY` ست نشده)، بی‌سروصدا `False` برمی‌گردونه — گیت کلاً وجود نداره، هیچ فلوی موجودی نمی‌شکنه.
+2. اگه `BotSubscriber.site_verified` (کش محلی، مثل `User.site_verified` سمت پلتفرم) از قبل true باشه، بدون تماس شبکه‌ای `False`.
+3. برای `channel="sms"` که هنوز شماره‌ای ثبت نشده: `SubscriberVerifyStates.waiting_for_phone` (یه state جدا و **بدون دکمه‌ی Skip** — برخلاف پرامپت شماره‌ی اختیاریِ `guide_video`، چون گیتی که بشه ردش کرد اصلاً گیت نیست).
+4. وگرنه `bot-verify/status` چک می‌شه: `verified` → کش و ادامه؛ `registered` (ثبت‌شده ولی تأییدنشده) → فقط `resend` و مستقیم گام کد؛ هیچ‌کدوم → ویزارد تک‌سوالی جمع‌آوری فیلد (SMS: نام→فامیل→آدرس→ایمیل؛ ایمیل: فقط ایمیل) و بعدش `bot-verify/start`.
+5. اگه چک وضعیت سایت با خطای شبکه/تنظیمات مواجه بشه، به‌جای مسدودکردن کامل خریدار، `False` برمی‌گردونه (لاگ هشدار) — یه قطعی موقت وب‌سایت نباید کل فلوی بات رو بخوابونه.
+
+متن خطاها از `bot/website_client.py:verify_error_text` می‌آد — همون دیکشنری مشترکی که `bot/handlers/live.py` هم برای گیت پلتفرمی استفاده می‌کنه (یه‌جا نگه‌داشته می‌شه تا دو تا سطح از هم جدا نیفتن).
+
+### هندلرهای ویزارد — `bot/runtime.py`
+
+فرم جمع‌آوری فیلد + کد OTP دقیقاً مثل ویزارد `bot/handlers/live.py` (بخش قبل)، ولی این‌بار داخل فکتوری دیسپچرِ per-bot (`bot/runtime.py`، کنار `_save_subscriber_phone_and_resume` موجود) و روی `bot.db.models.BotSubscriber` (نه `User` پلتفرم). `SubscriberVerifyStates` (`bot/states.py`) شش state داره: `waiting_for_phone` (فقط sms)، `waiting_for_first_name`، `waiting_for_last_name`، `waiting_for_address`، `waiting_for_email`، `waiting_for_code`.
+
+بعد از تأیید موفق کد، `_resume_after_subscriber_verification` دقیقاً همون الگوی resume نودهای `force_join_gate`/`guide_video` رو تکرار می‌کنه: `resume_legacy_command_id` در FSM data (اگه یه Command تعریف‌شده‌ی چتی گیت شده بود) در اولویته، وگرنه `run_flow` با `resume_flow_command` کل فلو رو از اول دوباره اجرا می‌کنه — همون رفتار «اجرای دوباره‌ی فلو بی‌ضرره» که برای force_join_gate/guide_video هم مستند شده (پیام‌های قبل از گیت دوباره فرستاده می‌شن، ولی این‌بار چون `site_verified=True` شده، از verify_gate رد می‌شه و ادامه می‌ده).
+
+### دیتابیس — `BotSubscriber.site_verified` / `site_email`
+
+دقیقاً همون دو ستون `User.site_verified`/`site_email` (بخش قبل)، این‌بار روی `bot_subscribers` — کش محلی یک‌بار-برای-همیشه (وردپرس هیچ‌وقت verified رو false نمی‌کنه، پس دیگه هیچ‌وقت دوباره چک نمی‌شه).
+
+### فرانت‌اند — `webapp/src/nodes.jsx`
+
+یه ورودی جدید در `BLOCK_DEFS` (`type: 'verify_gate'`, `defaultData: {channel: 'email'}`) و کامپوننت `VerifyGateNode` — یه `<select>` ساده برای انتخاب `email` یا `sms` که مستقیم `data.channel` رو آپدیت می‌کنه، دقیقاً هم‌الگو با ورودی متنی `TriggerNode`. چون `Palette.jsx` و `App.jsx` هر دو کاملاً روی `BLOCK_DEFS`/`nodeTypes` عمومی کار می‌کنن (هیچ لیست سخت‌کدشده‌ی جداگانه‌ای از انواع نود جای دیگه نیست)، همین دو خط اضافه (ثبت در `BLOCK_DEFS` + `nodeTypes`) کافیه تا نود در پالت ظاهر بشه، قابل کشیدن‌ورهاکردن باشه، و state خودش رو مثل بقیه‌ی نودها ذخیره/بارگذاری کنه.
+
+### تنظیمات لازم
+
+هیچ env var جدیدی لازم نیست — از همون `WEBSITE_VERIFY_KEY`/`EMB_BOT_VERIFY_KEY` بخش قبل استفاده می‌کنه. اگه اون‌ها ست نشده باشن، نود `verify_gate` رو هر بات مالکی به فلوش اضافه کنه، بی‌اثر می‌مونه (فلو از کنارش رد می‌شه، هیچ خریداری گیر نمی‌کنه).
