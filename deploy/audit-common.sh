@@ -24,8 +24,8 @@ redact() {
     -e 's/[0-9]{6,12}:[A-Za-z0-9_-]{30,}/<BOT_TOKEN>/g' \
     -e 's/(sk|pk|rk)_(live|test)_[A-Za-z0-9]{8,}/<STRIPE_KEY>/g' \
     -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<EMAIL>/g' \
-    -e 's/(password|passwd|secret|token|key|authorization)([" :=]+)[^ ",;]+/\1\2<REDACTED>/Ig' \
-    -e 's/[A-Za-z0-9_+\/=-]{40,}/<LONG_STRING>/g'
+    -e 's/(password|passwd|secret|token|key|authorization)(["]?[ ]*[:=][ ]*["]?)[^ ",;]{6,}/\1\2<REDACTED>/Ig' \
+    -e 's/[A-Za-z0-9_+=-]{40,}/<LONG_STRING>/g'
 }
 
 audit_system() {
@@ -115,9 +115,9 @@ audit_docker() {
     | sed 's/^/  [WARN] published to the internet: /'
 }
 
-audit_logs() {  # $1 = container name, $2 = lines
+audit_logs() {  # $1 = container name or id, $2 = lines
   local c="$1" n="${2:-200}"
-  section "Recent errors in $c logs (redacted)"
+  section "Recent errors in $($SUDO docker inspect -f '{{.Name}}' "$c" 2>/dev/null | tr -d /) logs (redacted)"
   $SUDO docker logs --tail "$n" "$c" 2>&1 | grep -iE 'error|exception|traceback|critical|fatal' | tail -25 | redact | sed 's/^/  /'
 }
 
