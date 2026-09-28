@@ -61,13 +61,7 @@ x-wp-env: &wp-env
   # Shared secret for the plan activation-code REST API (mu-plugin
   # emb-activation-codes.php). The @easymakebot bot sends it as X-EMB-Key.
   EMB_ACTIVATION_KEY: ${EMB_ACTIVATION_KEY:-}
-  # Shared secret for the Zarinpal proxy REST API (mu-plugin
-  # emb-zarinpal-proxy.php) — separate key from EMB_ACTIVATION_KEY so it can
-  # be rotated on its own, since this one sits in the path of real payments.
   EMB_ZARINPAL_PROXY_KEY: ${EMB_ZARINPAL_PROXY_KEY:-}
-  # Shared secret for the bot-side registration+OTP verification bridge
-  # (mu-plugin emb-bot-verify.php) — separate key from the others above so
-  # it can be rotated on its own.
   EMB_BOT_VERIFY_KEY: ${EMB_BOT_VERIFY_KEY:-}
   # SMS OTP for Iranian account verification (mu-plugin emb-accounts.php).
   # Leave driver "log" until the Kavenegar account + template are ready, then
