@@ -58,6 +58,11 @@ class Config:
     # otherwise it's silently skipped (graceful-omit, same as everything
     # else website-bridge related).
     website_verify_key: str | None
+    # Static API key required in the "X-EMB-Key" header to read
+    # GET /api/platform/stats (bot/webapp_server.py) -- the platform-wide
+    # stats endpoint used for the business owner's own dashboards/reports,
+    # never exposed to bot owners. Unset -> the endpoint responds 503.
+    platform_stats_api_key: str | None
 
 
 def load_config() -> Config:
@@ -85,6 +90,7 @@ def load_config() -> Config:
     zarinpal_proxy_url = (os.getenv("ZARINPAL_PROXY_URL") or "").strip().rstrip("/") or None
     zarinpal_proxy_key = (os.getenv("ZARINPAL_PROXY_KEY") or "").strip() or None
     website_verify_key = (os.getenv("WEBSITE_VERIFY_KEY") or "").strip() or None
+    platform_stats_api_key = os.getenv("PLATFORM_STATS_API_KEY") or None
 
     if not bot_token:
         raise ValueError(
@@ -117,4 +123,5 @@ def load_config() -> Config:
         zarinpal_proxy_url=zarinpal_proxy_url,
         zarinpal_proxy_key=zarinpal_proxy_key,
         website_verify_key=website_verify_key,
+        platform_stats_api_key=platform_stats_api_key,
     )
