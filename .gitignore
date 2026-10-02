@@ -24,3 +24,6 @@ None
 .claude/settings.local.json
 website.txt
 **/wp-config.php
+
+# Hamdam local SQLite
+hamdam.db
