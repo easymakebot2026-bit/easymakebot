@@ -35,12 +35,16 @@ class User(Base):
     # possible (bot.guide.is_iran_phone), else asked once and remembered here.
     region: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
-    # The free 72h /live trial (bot/live.py:TRIAL_HOURS) is one-time PER
-    # PERSON, not per bot — set the moment any of this user's bots starts a
-    # trial (bot/handlers/live.py:start_trial), and checked before offering
-    # the trial button on every OTHER bot they build, so deleting a bot and
-    # creating a new one can't farm another free 72h window.
+    # Legacy "one trial per person" flag (kept so the column and old rows stay
+    # valid) — superseded by trial_count below.
     trial_used: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    # The live quota (replaces trial_used above): at most
+    # live.MAX_TRIALS_PER_CYCLE free trials started since this person's last
+    # PAID plan (trial_count), and at most live.MAX_CONCURRENT_TRIALS trial
+    # windows open at once. trial_count lives on the user, not on BuiltBot, so
+    # deleting a bot (here or in Telegram) and creating a new one can't reset
+    # it; a successful paid activation resets it to 0 (live.reset_trial_cycle).
+    trial_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0", default=0)
 
     # Identity verification on the marketing website (web/wordpress/wp-
     # content/mu-plugins/emb-accounts.php + emb-bot-verify.php), required
@@ -135,6 +139,11 @@ class BuiltBot(Base):
     # silently revive it; only an explicit admin unsuspend can. Checked
     # ahead of the live/expired check at every gating touchpoint.
     suspended: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # What opened the current/last live window: "trial" | "paid" | "admin"
+    # (admin grant). Only open "trial" windows count toward a user's
+    # concurrent-trial cap (live.MAX_CONCURRENT_TRIALS). NULL on rows that
+    # predate this column — they're simply not counted.
+    live_kind: Mapped[str | None] = mapped_column(String(10), nullable=True)
     suspension_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
     # "shop" | "subscription" | None (not chosen yet) — bot/commerce_mode.py.

@@ -25,7 +25,7 @@
 | `/help` | همه | لیست همین دستورها. |
 | `/mybots` | صاحب ربات | لیست ربات‌هایی که ساختی؛ با زدن روی هرکدوم وارد محیط ویرایش همون میشی. |
 | `/newbot` | همه | ساخت ربات جدید. باید اول از **@BotFather** توکن بگیری (چیزی شبیه `123456:ABC-...`) و همون رو بفرستی. |
-| `/live` | صاحب ربات (روی یک ربات انتخاب‌شده) | لایو‌کردن ربات: تست رایگان ۷۲ساعته یک‌باره، یا خرید پلن. |
+| `/live` | صاحب ربات (روی یک ربات انتخاب‌شده) | لایو‌کردن ربات: تست رایگان ۷۲ساعته (برای هر ربات یک‌بار؛ هم‌زمان حداکثر ۳ ربات و حداکثر ۱۰ تست تا اولین اشتراک پولی)، یا خرید پلن. |
 | `/cancel` | همه | لغو هر ویزارد نیمه‌کاره و برگشت به منو — همیشه کار می‌کند، هر وضعیتی که باشی. |
 | `/easybotadmin` | فقط ادمین پلتفرم | پنل مدیریت کل پلتفرم. |
 | `/send_to_all` | فقط ادمین پلتفرم | پیام همگانی به همه‌ی **سازنده‌های ربات** (نه کاربران نهایی). |
@@ -116,7 +116,7 @@
 | `/help` | Everyone | Lists these same commands. |
 | `/mybots` | Bot owner | Lists the bots you've built; tap one to enter its editing environment. |
 | `/newbot` | Everyone | Create a new bot. First get a token from **@BotFather** (looks like `123456:ABC-...`), then send it. |
-| `/live` | Bot owner (on a selected bot) | Go live: a one-time 72-hour free trial, or buying a plan. |
+| `/live` | Bot owner (on a selected bot) | Go live: a 72-hour free trial (once per bot; at most 3 bots at the same time and 10 trials until you buy a plan), or buying a plan. |
 | `/cancel` | Everyone | Cancels any half-finished wizard and returns to the menu — works in any state. |
 | `/easybotadmin` | Platform admin only | The whole-platform admin console. |
 | `/send_to_all` | Platform admin only | Broadcasts to every **bot creator** on the platform (not end users). |

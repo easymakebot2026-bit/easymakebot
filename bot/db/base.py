@@ -284,6 +284,14 @@ async def init_db() -> None:
         await conn.execute(
             text("ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_used BOOLEAN NOT NULL DEFAULT false")
         )
+        # Free-trial quota (bot/live.py): per-owner trial counter and what
+        # opened each bot's live window.
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_count INTEGER NOT NULL DEFAULT 0")
+        )
+        await conn.execute(
+            text("ALTER TABLE built_bots ADD COLUMN IF NOT EXISTS live_kind VARCHAR(10)")
+        )
         # Postgres doesn't auto-index foreign keys. These back the per-bot /
         # per-owner scoped queries that run on every incoming message or
         # dashboard view (bot/runtime.py's command lookup on every update is

@@ -1,5 +1,6 @@
-"""Shared logic for a built bot's "go live" lifecycle: a one-time free
-trial, or a paid plan (LIVE_PLANS — one placeholder plan for now, real
+"""Shared logic for a built bot's "go live" lifecycle: a free trial (once per
+bot, within the owner's quota — see MAX_CONCURRENT_TRIALS / MAX_TRIALS_PER_CYCLE),
+or a paid plan (LIVE_PLANS — one placeholder plan for now, real
 pricing TBD, see bot/platform_billing.py for the actual payment wiring),
 after which the bot's Telegram polling is stopped (bot/runtime.py) and its
 owner-side editing tools are gated until a plan is purchased. Also carries
@@ -21,12 +22,29 @@ LIVE_PLANS from here instead.
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from bot.db.base import async_session_maker
 from bot.db.models import BuiltBot, User
 
 TRIAL_HOURS = 72
+
+# Free-trial quota (infrastructure protection), per bot owner:
+# - at most MAX_CONCURRENT_TRIALS bots on an open trial window at the same time;
+# - at most MAX_TRIALS_PER_CYCLE trials started since the owner's last PAID plan,
+#   counted on User.trial_count (so deleting bots can't reset it). A successful
+#   paid activation (reset_trial_cycle) opens a fresh cycle of that many trials.
+# A single bot still only ever gets one trial (its live_until stays set).
+MAX_CONCURRENT_TRIALS = 3
+MAX_TRIALS_PER_CYCLE = 10
+
+LIVE_KIND_TRIAL = "trial"
+LIVE_KIND_PAID = "paid"
+LIVE_KIND_ADMIN = "admin"
+
+TRIAL_BLOCK_QUOTA = "quota"
+TRIAL_BLOCK_CONCURRENT = "concurrent"
+TRIAL_BLOCK_BOT_USED = "bot_used"
 
 # Real plans/pricing TBD — one clearly-placeholder plan so the whole payment
 # path (bot/platform_billing.py, bot/handlers/live.py) is wired end to end;
@@ -91,13 +109,19 @@ async def get_owned_built_bot(bot_id: uuid.UUID | str, telegram_id: int) -> Buil
         return result.scalar_one_or_none()
 
 
-async def set_live_until(bot_id: uuid.UUID | str, until: datetime | None) -> BuiltBot | None:
+async def set_live_until(
+    bot_id: uuid.UUID | str, until: datetime | None, kind: str | None = None
+) -> BuiltBot | None:
+    """`kind` ("trial" | "paid" | "admin") records what opened the window
+    (BuiltBot.live_kind); None leaves the stored value untouched."""
     async with async_session_maker() as session:
         result = await session.execute(select(BuiltBot).where(BuiltBot.id == bot_id))
         built_bot = result.scalar_one_or_none()
         if built_bot is None:
             return None
         built_bot.live_until = until
+        if kind is not None:
+            built_bot.live_kind = kind
         await session.commit()
         await session.refresh(built_bot)
         return built_bot
@@ -107,18 +131,119 @@ def trial_until() -> datetime:
     return datetime.now(timezone.utc) + timedelta(hours=TRIAL_HOURS)
 
 
-async def mark_trial_used(owner_id: int) -> None:
-    """Called once, right after a trial actually starts (bot/handlers/live.py:
-    start_trial) — flips User.trial_used so no OTHER bot belonging to the same
-    person can ever be offered the trial button again. Deliberately keyed off
-    User.id (one row per Telegram account), not BuiltBot, so deleting the
-    trial bot and creating a new one doesn't reset anything."""
+def _open_trial_count_query(owner_id: int, now: datetime):
+    return (
+        select(func.count())
+        .select_from(BuiltBot)
+        .where(
+            BuiltBot.owner_id == owner_id,
+            BuiltBot.live_kind == LIVE_KIND_TRIAL,
+            BuiltBot.live_until.is_not(None),
+            BuiltBot.live_until > now,
+        )
+    )
+
+
+async def trial_block_reason(owner_id: int, bot_id: uuid.UUID | str | None = None) -> str | None:
+    """Why this owner can't start a free trial right now (read-only, for
+    deciding what /live shows): TRIAL_BLOCK_BOT_USED if `bot_id` already had a
+    live window, TRIAL_BLOCK_QUOTA if the cycle's trials are used up,
+    TRIAL_BLOCK_CONCURRENT if MAX_CONCURRENT_TRIALS windows are open, else
+    None. start_trial() re-checks all of this atomically."""
+    now = datetime.now(timezone.utc)
     async with async_session_maker() as session:
-        result = await session.execute(select(User).where(User.id == owner_id))
-        user = result.scalar_one_or_none()
-        if user is not None and not user.trial_used:
-            user.trial_used = True
-            await session.commit()
+        if bot_id is not None:
+            built_bot = (
+                await session.execute(select(BuiltBot).where(BuiltBot.id == bot_id))
+            ).scalar_one_or_none()
+            if built_bot is not None and built_bot.live_until is not None:
+                return TRIAL_BLOCK_BOT_USED
+        user = (await session.execute(select(User).where(User.id == owner_id))).scalar_one_or_none()
+        if user is not None and (user.trial_count or 0) >= MAX_TRIALS_PER_CYCLE:
+            return TRIAL_BLOCK_QUOTA
+        open_trials = (await session.execute(_open_trial_count_query(owner_id, now))).scalar_one()
+        if open_trials >= MAX_CONCURRENT_TRIALS:
+            return TRIAL_BLOCK_CONCURRENT
+    return None
+
+
+async def start_trial(bot_id: uuid.UUID | str) -> tuple[BuiltBot | None, str | None, datetime | None]:
+    """Atomically starts the free trial for one bot. Returns
+    (built_bot, block_reason, until): block_reason is None on success, else
+    one of the TRIAL_BLOCK_* constants (nothing was changed).
+
+    The owner's User row is locked (SELECT ... FOR UPDATE) for the whole
+    check-and-set, so two simultaneous taps — or two bots tapped at once —
+    can't both slip past the concurrent cap or the cycle quota."""
+    now = datetime.now(timezone.utc)
+    async with async_session_maker() as session:
+        built_bot = (
+            await session.execute(select(BuiltBot).where(BuiltBot.id == bot_id))
+        ).scalar_one_or_none()
+        if built_bot is None:
+            return None, None, None
+        user = (
+            await session.execute(
+                select(User).where(User.id == built_bot.owner_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if user is None:
+            return built_bot, None, None
+        # Re-read the bot under the lock: a parallel tap on the SAME bot may
+        # have just started its trial.
+        await session.refresh(built_bot)
+        if built_bot.live_until is not None:
+            return built_bot, TRIAL_BLOCK_BOT_USED, None
+        if (user.trial_count or 0) >= MAX_TRIALS_PER_CYCLE:
+            return built_bot, TRIAL_BLOCK_QUOTA, None
+        open_trials = (await session.execute(_open_trial_count_query(user.id, now))).scalar_one()
+        if open_trials >= MAX_CONCURRENT_TRIALS:
+            return built_bot, TRIAL_BLOCK_CONCURRENT, None
+
+        until = trial_until()
+        built_bot.live_until = until
+        built_bot.live_kind = LIVE_KIND_TRIAL
+        user.trial_count = (user.trial_count or 0) + 1
+        user.trial_used = True  # legacy flag, kept in step for old readers
+        await session.commit()
+        await session.refresh(built_bot)
+        return built_bot, None, until
+
+
+async def reset_trial_cycle(owner_id: int) -> None:
+    """A PAID plan was activated for one of this owner's bots (a payment
+    gateway, or a website activation code) — opens a fresh cycle of
+    MAX_TRIALS_PER_CYCLE trials. Admin grants don't call this."""
+    async with async_session_maker() as session:
+        await session.execute(update(User).where(User.id == owner_id).values(trial_count=0))
+        await session.commit()
+
+
+def trial_block_text(reason: str, is_fa: bool = False) -> str:
+    """Owner-facing explanation for a TRIAL_BLOCK_* reason."""
+    if reason == TRIAL_BLOCK_BOT_USED:
+        return (
+            "دوره‌ی آزمایشی این ربات قبلاً استفاده شده. برای فعال‌سازی دوباره باید اشتراک تهیه کنی."
+            if is_fa
+            else "This bot has already used its free trial. Buy a plan to make it live again."
+        )
+    if reason == TRIAL_BLOCK_CONCURRENT:
+        return (
+            f"هم‌زمان فقط {MAX_CONCURRENT_TRIALS} ربات می‌تونن با تست رایگان لایو باشن و الان همه‌ی "
+            "ظرفیتت پره. صبر کن تا یکی از تست‌ها تموم بشه، یا برای یکی از ربات‌هات اشتراک تهیه کن."
+            if is_fa
+            else f"Only {MAX_CONCURRENT_TRIALS} bots can be live on a free trial at the same time, and "
+            "all your slots are in use. Wait for one trial to end, or buy a plan for one of your bots."
+        )
+    return (
+        "⛔ به‌دلیل محدودیت در زیرساخت، تا وقتی برای یک ربات دلخواه اشتراک تهیه نکنی نمی‌تونی ربات "
+        f"دیگه‌ای رو لایو کنی (سقف {MAX_TRIALS_PER_CYCLE} تست رایگان رسیده). بعد از خرید اشتراک برای "
+        f"حتی یک ربات، دوباره می‌تونی تا {MAX_TRIALS_PER_CYCLE} ربات دیگه رو لایو کنی."
+        if is_fa
+        else f"⛔ Because of infrastructure limits, you can't make another bot live until a plan has been "
+        f"bought for one bot of your choice (you've reached the {MAX_TRIALS_PER_CYCLE} free-trial limit). "
+        f"Once you buy a plan for even one bot, you can make up to {MAX_TRIALS_PER_CYCLE} more bots live."
+    )
 
 
 def suspension_status_text(built_bot: BuiltBot, is_fa: bool = False) -> str:

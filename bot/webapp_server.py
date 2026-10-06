@@ -16,7 +16,12 @@ from bot.content_nav import delete_item_rows, get_item, reparent_item, upsert_it
 from bot.db.base import async_session_maker
 from bot.db.models import BuiltBot, ContentItem, LivePayment, Order, User
 from bot.platform_billing import verify_stripe_live_payment, verify_zarinpal_live_payment
-from bot.message_buttons import is_valid_button_url, is_valid_command_name
+from bot.message_buttons import (
+    MAX_BUTTONS,
+    is_valid_button_url,
+    is_valid_command_name,
+    validate_buttons,
+)
 from bot.runtime import sync_bot_commands
 from bot.shop import (
     verify_stripe_checkout,
@@ -27,6 +32,51 @@ from bot.shop import (
 from bot.webapp_auth import validate_init_data
 
 logger = logging.getLogger(__name__)
+
+# Commands the bot already handles itself ahead of any owner-defined one — a
+# trigger with one of these names could never run (/cancel is handled first
+# everywhere) or would silently shadow a built-in.
+RESERVED_TRIGGER_COMMANDS = frozenset({"/cancel"})
+
+MAX_MESSAGE_TEXT = 4096  # Telegram text message limit
+MAX_MEDIA_CAPTION = 1024  # Telegram caption limit when media is attached
+MAX_MESSAGES_PER_NODE = 10
+
+
+def _message_node_error(data: dict) -> str | None:
+    """Same checks the chat wizard (bot/handlers/tools/define_command.py)
+    applies at input time, run on what the Visual Builder saves — otherwise a
+    too-long text or one bad button URL makes Telegram reject the whole
+    message at delivery time, with nobody told why."""
+    messages = data.get("messages")
+    if messages is None:
+        return None  # legacy {"text": ...} shape — nothing new to validate
+    if not isinstance(messages, list):
+        return "Send Message: messages must be a list"
+    if len(messages) > MAX_MESSAGES_PER_NODE:
+        return f"Send Message: at most {MAX_MESSAGES_PER_NODE} messages per block"
+    for index, block in enumerate(messages, start=1):
+        if not isinstance(block, dict):
+            return f"Send Message #{index}: invalid message"
+        has_media = bool(block.get("media_url") or block.get("media_file_id"))
+        text = str(block.get("text") or "")
+        limit = MAX_MEDIA_CAPTION if has_media else MAX_MESSAGE_TEXT
+        if len(text) > limit:
+            return f"Send Message #{index}: text is {len(text)} characters, the limit is {limit}"
+        media_url = str(block.get("media_url") or "").strip()
+        if media_url and not is_valid_button_url(media_url):
+            return f"Send Message #{index}: media link must be an http:// or https:// URL without spaces"
+        if block.get("media_type") not in (None, "", "photo", "video", "document"):
+            return f"Send Message #{index}: unknown media type"
+        buttons = block.get("buttons")
+        if buttons is not None and not isinstance(buttons, list):
+            return f"Send Message #{index}: buttons must be a list"
+        error = validate_buttons(buttons)
+        if error:
+            return f"Send Message #{index}: {error}"
+    return None
+
+
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "webapp" / "dist"
 
@@ -207,10 +257,18 @@ def create_app(bot_token: str) -> web.Application:
         ):
             return web.json_response({"error": "flow must have nodes and edges"}, status=400)
 
+        seen_triggers: set[str] = set()
         for node in flow["nodes"]:
+            data = node.get("data") if isinstance(node.get("data"), dict) else {}
+
+            if node.get("type") == "send_message":
+                error = _message_node_error(data)
+                if error:
+                    return web.json_response({"error": error}, status=400)
+                continue
+
             if node.get("type") != "trigger":
                 continue
-            data = node.get("data") if isinstance(node.get("data"), dict) else {}
             command = str(data.get("command") or "").strip().lower()
             if command and not command.startswith("/"):
                 command = "/" + command
@@ -221,6 +279,24 @@ def create_app(bot_token: str) -> web.Application:
                         "English letters, digits or _ (max 32)"
                     },
                     status=400,
+                )
+            if command in RESERVED_TRIGGER_COMMANDS:
+                return web.json_response(
+                    {"error": f"{command} is reserved and can't be used as a trigger"}, status=400
+                )
+            if command in seen_triggers:
+                return web.json_response(
+                    {"error": f"two Trigger blocks use {command} — each command can have only one"},
+                    status=400,
+                )
+            seen_triggers.add(command)
+            if data.get("visibility", "everyone") not in ("everyone", "admin"):
+                return web.json_response(
+                    {"error": f'{command}: visibility must be "everyone" or "admin"'}, status=400
+                )
+            if command == "/start" and data.get("visibility") == "admin":
+                return web.json_response(
+                    {"error": "/start can't be admin-only — everyone needs it to begin"}, status=400
                 )
 
         async with async_session_maker() as session:

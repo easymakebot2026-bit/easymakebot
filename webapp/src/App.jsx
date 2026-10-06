@@ -120,6 +120,20 @@ function Canvas() {
       )
       return
     }
+    const seen = new Set()
+    for (const n of nodes) {
+      if (n.type !== 'trigger') continue
+      const cmd = normalizeCommand(n.data?.command)
+      if (cmd === '/cancel') {
+        setStatus('/cancel is reserved — pick another command name.')
+        return
+      }
+      if (seen.has(cmd)) {
+        setStatus(`Two Trigger blocks use ${cmd} — each command can have only one.`)
+        return
+      }
+      seen.add(cmd)
+    }
     setStatus('Saving…')
     try {
       await saveFlow({
