@@ -64,10 +64,15 @@ async def _send_live_status(
         )
         await message.answer(f"{live.suspension_status_text(built_bot, is_fa)}{extra}")
 
-    # One-time per PERSON (User.trial_used), not per bot — see bot/live.py:
-    # mark_trial_used. A bot that already went live once (live_until is not
-    # None) never shows the trial button either way.
-    show_trial = built_bot.live_until is None and not (user.trial_used if user else False)
+    # Free-trial quota — see bot/live.py (MAX_CONCURRENT_TRIALS,
+    # MAX_TRIALS_PER_CYCLE). A bot that already went live once (live_until is
+    # not None) never shows the trial button either way.
+    block = await live.trial_block_reason(built_bot.owner_id, built_bot.id) if user else None
+    show_trial = built_bot.live_until is None and user is not None and block is None
+    if block in (live.TRIAL_BLOCK_QUOTA, live.TRIAL_BLOCK_CONCURRENT):
+        # Tell them directly why there's no trial button, rather than
+        # silently hiding it.
+        await message.answer(live.trial_block_text(block, is_fa))
 
     if region is None:
         await message.answer(
@@ -243,21 +248,18 @@ async def start_trial(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     owner = await _get_user(callback.from_user.id)
-    if owner is not None and owner.trial_used:
-        text = (
-            "آزمایشی رایگانت قبلاً روی یکی دیگه از ربات‌هات مصرف شده — هر حساب فقط یه بار "
-            "می‌تونه از تست رایگان استفاده کنه. برای فعال‌سازی این ربات یکی از پلن‌های پرداختی "
-            "پایین رو انتخاب کن."
-            if is_fa
-            else "Your free trial has already been used on another one of your bots — each "
-            "account only gets one. Choose a payment plan below to activate this bot."
-        )
-        await callback.answer(text, show_alert=True)
+    if owner is None or owner.id != built_bot.owner_id:
+        await callback.answer("ربات پیدا نشد." if is_fa else "Bot not found.", show_alert=True)
         return
 
-    until = live.trial_until()
-    built_bot = await live.set_live_until(built_bot.id, until)
-    await live.mark_trial_used(built_bot.owner_id)
+    built_bot, block, until = await live.start_trial(built_bot.id)
+    if block is not None:
+        await callback.answer()
+        await callback.message.answer(live.trial_block_text(block, is_fa))
+        return
+    if built_bot is None or until is None:
+        await callback.answer("ربات پیدا نشد." if is_fa else "Bot not found.", show_alert=True)
+        return
     if not built_bot.suspended:
         start_built_bot(built_bot.id, built_bot.token)
 
@@ -417,7 +419,9 @@ async def _apply_activation_code(
     base = built_bot.live_until if (built_bot.live_until and built_bot.live_until > now) else now
     until = base + timedelta(days=days)
 
-    built_bot = await live.set_live_until(built_bot.id, until)
+    built_bot = await live.set_live_until(built_bot.id, until, kind=live.LIVE_KIND_PAID)
+    if built_bot is not None:
+        await live.reset_trial_cycle(built_bot.owner_id)
     if built_bot is not None and not built_bot.suspended:
         start_built_bot(built_bot.id, built_bot.token)
 

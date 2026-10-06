@@ -21,7 +21,7 @@ from bot.config import load_config
 from bot.db.base import async_session_maker
 from bot.db.models import BuiltBot, LivePayment, User
 from bot.guide import is_iran_phone
-from bot.live import LIVE_PLANS, get_built_bot, set_live_until
+from bot.live import LIVE_KIND_PAID, LIVE_PLANS, get_built_bot, reset_trial_cycle, set_live_until
 from bot.runtime import start_built_bot
 from bot.session import make_session
 from bot.shop import (
@@ -135,7 +135,9 @@ async def _activate_bot(payment: LivePayment) -> None:
     existing = await get_built_bot(payment.bot_id)
     base = existing.live_until if (existing and existing.live_until and existing.live_until > now) else now
     until = base + timedelta(days=payment.days if payment.days is not None else 3650)
-    built_bot = await set_live_until(payment.bot_id, until)
+    built_bot = await set_live_until(payment.bot_id, until, kind=LIVE_KIND_PAID)
+    if built_bot is not None:
+        await reset_trial_cycle(built_bot.owner_id)
     if built_bot is not None and not built_bot.suspended:
         start_built_bot(built_bot.id, built_bot.token)
 

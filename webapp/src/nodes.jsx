@@ -57,6 +57,23 @@ export function TriggerNode({ id, data }) {
       <div className="flow-node-hint">
         Lowercase English letters, digits and _ only, e.g. /start, /menu, /help
       </div>
+      {normalizeCommand(data.command) !== '/start' && (
+        <select
+          className="nodrag flow-node-input"
+          value={data.visibility === 'admin' ? 'admin' : 'everyone'}
+          onChange={(e) => updateNodeData(id, { visibility: e.target.value })}
+        >
+          <option value="everyone">👥 Everyone can use this command</option>
+          <option value="admin">👤 Admin only (just me)</option>
+        </select>
+      )}
+      {normalizeCommand(data.command) === '/start' && (
+        <div className="flow-node-hint">
+          This block replaces the /start command saved in the bot chat — the
+          welcome text, contact and social links entered there are not carried
+          over, so re-enter them in the Send Message block below.
+        </div>
+      )}
     </NodeCard>
   )
 }

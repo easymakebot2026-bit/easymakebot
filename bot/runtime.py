@@ -127,6 +127,15 @@ def _format_start_message(payload: dict[str, Any]) -> str:
     return "\n".join(line for line in lines if line != "")
 
 
+def _flow_trigger_is_admin_only(flow: dict[str, Any] | None, command: str) -> bool:
+    """True if the Visual Builder Trigger for `command` is marked admin-only
+    (data.visibility == "admin"). /start is never admin-only."""
+    if not flow or _normalize_command(command) == "/start":
+        return False
+    node = find_trigger_node(flow, command)
+    return bool(node and (node.get("data") or {}).get("visibility") == "admin")
+
+
 async def _should_use_flow_for_start(bot_id: uuid.UUID, built_bot: BuiltBot | None) -> bool:
     """For /start specifically, both the visual flow builder and the legacy
     chat-based "Define Command" wizard can define its behavior — whichever
@@ -275,9 +284,12 @@ async def sync_bot_commands(bot_id: uuid.UUID) -> None:
                 admin_only.add(c.name)
     for node in flow.get("nodes", []) if isinstance(flow.get("nodes"), list) else []:
         if isinstance(node, dict) and node.get("type") == "trigger":
-            name = _normalize_command((node.get("data") or {}).get("command", ""))
+            node_data = node.get("data") or {}
+            name = _normalize_command(node_data.get("command", ""))
             if is_valid_command_name(name):
                 kinds.setdefault(name, "flow")
+                if node_data.get("visibility") == "admin" and name != "/start":
+                    admin_only.add(name)
 
     # Built-in browse-content command, only offered once there's something to browse.
     if await has_any_content(bot_id):
@@ -342,7 +354,7 @@ async def sync_bot_commands(bot_id: uuid.UUID) -> None:
                 # menu, which would otherwise keep listing deleted ones.
                 await temp_bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=owner_telegram_id))
     except Exception:
-        logger.warning("Failed to sync command menu for bot %s", bot_id)
+        logger.warning("Failed to sync command menu for bot %s", bot_id, exc_info=True)
     finally:
         await temp_bot.session.close()
 
@@ -2626,6 +2638,14 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             result = await session.execute(select(BuiltBot).where(BuiltBot.id == bot_id))
             built_bot = result.scalar_one_or_none()
 
+        if _flow_trigger_is_admin_only(built_bot.flow_definition, command_token) and (
+            message.from_user.id != owner_telegram_id
+        ):
+            # Admin-only trigger: hidden from everyone else's menu
+            # (sync_bot_commands) and inert here too — same as a legacy
+            # admin-only command (handle_legacy_command).
+            return
+
         await _register_subscriber(message.from_user.id)
         await run_flow(bot, bot_id, built_bot.flow_definition, command_token, message, state)
 
@@ -2700,6 +2720,10 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             return True
 
         if flow_node is not None:
+            if _flow_trigger_is_admin_only(built_bot.flow_definition, command_token) and (
+                message.from_user.id != owner_telegram_id
+            ):
+                return False
             await _register_subscriber(message.from_user.id)
             await run_flow(bot, bot_id, built_bot.flow_definition, command_token, message, state)
             return True

@@ -269,6 +269,7 @@ async def grant_bot_access(bot_id: uuid.UUID | str, days: int | None) -> BuiltBo
         if built_bot is None:
             return None
         built_bot.live_until = until
+        built_bot.live_kind = "admin"  # an admin grant is not a paid plan: no trial-cycle reset
         await session.commit()
         await session.refresh(built_bot)
 
