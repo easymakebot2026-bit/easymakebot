@@ -16,6 +16,7 @@ from bot.content_nav import delete_item_rows, get_item, reparent_item, upsert_it
 from bot.db.base import async_session_maker
 from bot.db.models import BuiltBot, ContentItem, LivePayment, Order, User
 from bot.platform_billing import verify_stripe_live_payment, verify_zarinpal_live_payment
+from bot.main_menu import clean_menu_label
 from bot.message_buttons import (
     MAX_BUTTONS,
     is_valid_button_url,
@@ -302,6 +303,12 @@ def create_app(bot_token: str) -> web.Application:
             if data.get("visibility", "everyone") not in ("everyone", "admin"):
                 return web.json_response(
                     {"error": f'{command}: visibility must be "everyone" or "admin"'}, status=400
+                )
+            menu_label = data.get("menu_label")
+            if menu_label not in (None, "") and clean_menu_label(menu_label) is None:
+                return web.json_response(
+                    {"error": f"{command}: menu button text can't start with / and must be at most 40 characters"},
+                    status=400,
                 )
             if command == "/start" and data.get("visibility") == "admin":
                 return web.json_response(

@@ -13,6 +13,8 @@ class DefineCommandStates(StatesGroup):
     # for a "message" action, the text to send) — see
     # bot/handlers/tools/define_command.py.
     waiting_for_command_visibility = State()
+    # Text of the command's button on the built bot's menu (bot/main_menu.py).
+    waiting_for_command_menu_label = State()
     waiting_for_command_action = State()
     # "message" action sub-wizard — builds one message block at a time
     # (optional attachment, text, optional buttons), looping for "add

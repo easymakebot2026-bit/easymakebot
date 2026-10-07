@@ -11,6 +11,7 @@ from bot.db.models import BuiltBot, Command
 from bot.guide import owner_prefers_persian
 from bot.keyboards import (
     COMMAND_VISIBILITY_BUTTON_TO_KEY,
+    MENU_LABEL_DEFAULT_TEXTS,
     cancel_button_text,
     cancel_reply_keyboard,
     command_action_button_to_key,
@@ -18,11 +19,13 @@ from bot.keyboards import (
     command_action_label,
     command_delete_confirm_keyboard,
     command_list_keyboard,
+    command_menu_label_keyboard,
     command_visibility_keyboard,
     show_commands_button,
     tool_button_texts,
     tools_reply_keyboard,
 )
+from bot.main_menu import clean_menu_label
 from bot.message_buttons import MAX_BUTTON_TEXT, MAX_BUTTONS, is_valid_command_name, validate_buttons
 from bot.runtime import sync_bot_commands
 from bot.session import make_session
@@ -276,7 +279,46 @@ async def receive_command_visibility(message: Message, state: FSMContext) -> Non
         await message.answer(text, reply_markup=command_visibility_keyboard(is_fa))
         return
 
-    await state.update_data(pending_command_visibility=visibility)
+    await state.update_data(pending_command_visibility=visibility, pending_command_menu_label=None)
+    await state.set_state(DefineCommandStates.waiting_for_command_menu_label)
+
+    data = await state.get_data()
+    name = data.get("pending_command_name", "")
+    if is_fa:
+        text = (
+            f"این دستور توی منوی ربات یه دکمه هم داره تا کاربرها لازم نباشه «{name}» رو تایپ کنن.\n"
+            "متن دکمه چی باشه؟ (مثلاً «📞 تماس با ما»، حداکثر ۴۰ کاراکتر)\n\n"
+            "یا «✨ پیش‌فرض» رو بزن."
+        )
+    else:
+        text = (
+            f"This command also gets a button on the bot's menu, so users don't have to type \"{name}\".\n"
+            "What should the button say? (e.g. \"📞 Contact us\", max 40 characters)\n\n"
+            "Or tap \"✨ Default\"."
+        )
+    await message.answer(text, reply_markup=command_menu_label_keyboard(is_fa))
+
+
+@router.message(DefineCommandStates.waiting_for_command_menu_label)
+async def receive_command_menu_label(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    raw = (message.text or "").strip()
+
+    if raw in MENU_LABEL_DEFAULT_TEXTS:
+        label = None
+    else:
+        label = clean_menu_label(raw)
+        if label is None:
+            text = (
+                "متن دکمه نباید با / شروع بشه و حداکثر ۴۰ کاراکتر باشه. دوباره بنویس یا «✨ پیش‌فرض» رو بزن."
+                if is_fa
+                else "The button text can't start with / and must be at most 40 characters. "
+                "Try again or tap \"✨ Default\"."
+            )
+            await message.answer(text, reply_markup=command_menu_label_keyboard(is_fa))
+            return
+
+    await state.update_data(pending_command_menu_label=label)
     await state.set_state(DefineCommandStates.waiting_for_command_action)
 
     text = "این دستور وقتی اجرا بشه چیکار کنه؟" if is_fa else "What should this command do when it's used?"
@@ -738,6 +780,9 @@ async def _save_command(
     name = data.get("pending_command_name")
     visibility = data.get("pending_command_visibility", "everyone")
     payload = {"action": action, **payload_extra}
+    menu_label = data.get("pending_command_menu_label")
+    if menu_label:
+        payload["menu_label"] = menu_label
 
     async with async_session_maker() as session:
         result = await session.execute(

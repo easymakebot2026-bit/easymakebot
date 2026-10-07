@@ -67,6 +67,21 @@ export function TriggerNode({ id, data }) {
           <option value="admin">👤 Admin only (just me)</option>
         </select>
       )}
+      {normalizeCommand(data.command) !== '/start' && (
+        <>
+          <input
+            className="nodrag flow-node-input"
+            placeholder="Menu button text (optional), e.g. 📞 Contact us"
+            maxLength={40}
+            dir="auto"
+            value={data.menu_label || ''}
+            onChange={(e) => updateNodeData(id, { menu_label: e.target.value })}
+          />
+          <div className="flow-node-hint">
+            Shown as a button on the bot's menu after /start. Leave empty to use the command name.
+          </div>
+        </>
+      )}
       {normalizeCommand(data.command) === '/start' && (
         <div className="flow-node-hint">
           This block replaces the /start command saved in the bot chat — the

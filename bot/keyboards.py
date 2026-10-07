@@ -249,6 +249,23 @@ def command_visibility_keyboard(is_fa: bool = False) -> ReplyKeyboardMarkup:
     )
 
 
+def menu_label_default_text(is_fa: bool = False) -> str:
+    return "✨ پیش‌فرض" if is_fa else "✨ Default"
+
+
+MENU_LABEL_DEFAULT_TEXTS = frozenset({menu_label_default_text(False), menu_label_default_text(True)})
+
+
+def command_menu_label_keyboard(is_fa: bool = False) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=menu_label_default_text(is_fa))],
+            [KeyboardButton(text=cancel_button_text(is_fa))],
+        ],
+        resize_keyboard=True,
+    )
+
+
 def command_list_keyboard(commands, is_fa: bool = False) -> InlineKeyboardMarkup | None:
     """One 🗑 row per deletable command. /start is excluded — it's redefined
     by re-running the wizard, not deleted, since a bot always needs one."""

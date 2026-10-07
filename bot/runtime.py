@@ -33,6 +33,12 @@ from bot.content_nav import (
     has_any_content,
 )
 from bot.keyboards import post_engagement_keyboard
+from bot.main_menu import (
+    build_main_menu,
+    collect_bot_commands,
+    command_for_label,
+    invalidate_menu_cache,
+)
 from bot.message_buttons import is_valid_button_url, is_valid_command_name
 from bot.db.base import async_session_maker
 from bot.db.models import BotPost, BotSubscriber, BroadcastLog, BuiltBot, Command, PostComment, PostLike, User
@@ -244,6 +250,7 @@ _COMMAND_DESCRIPTIONS = {
     "cart": "View your cart",
     "orders": "View your orders",
     "account": "Your account",
+    "status": "My subscription status",
     "help": "Show help",
     "stop": "Stop broadcast messages",
 }
@@ -266,62 +273,16 @@ async def sync_bot_commands(bot_id: uuid.UUID) -> None:
         if built_bot is None:
             return
         token = built_bot.token
-        flow = built_bot.flow_definition or {}
 
-        result = await session.execute(select(Command).where(Command.bot_id == bot_id))
-        commands = list(result.scalars())
-
-    # Only names Telegram accepts go on the menu: a single invalid one (old
-    # data saved before names were validated — uppercase, spaces, Persian
-    # letters) made setMyCommands reject the whole list, leaving every
-    # user with an empty "/" menu.
-    kinds: dict[str, str] = {}
-    admin_only: set[str] = set()
-    for c in commands:
-        if is_valid_command_name(c.name):
-            kinds[c.name] = c.command_type
-            if c.visibility == "admin":
-                admin_only.add(c.name)
-    for node in flow.get("nodes", []) if isinstance(flow.get("nodes"), list) else []:
-        if isinstance(node, dict) and node.get("type") == "trigger":
-            node_data = node.get("data") or {}
-            name = _normalize_command(node_data.get("command", ""))
-            if is_valid_command_name(name):
-                kinds.setdefault(name, "flow")
-                if node_data.get("visibility") == "admin" and name != "/start":
-                    admin_only.add(name)
-
-    # Built-in browse-content command, only offered once there's something to browse.
-    if await has_any_content(bot_id):
-        kinds.setdefault("/content", "content")
-
-    # Built-in cart command, only offered once there's something sellable to add to it.
-    if await shop.get_products(bot_id):
-        kinds.setdefault("/cart", "cart")
-        # Built-in order-history command — same gate as /cart (a shop
-        # exists), so a buyer always has a way to check on a purchase
-        # without the owner having to wire up an "order_status" flow node
-        # manually. A flow/legacy "/orders" trigger the owner defines
-        # themselves still wins (setdefault), same as /content and /cart.
-        kinds.setdefault("/orders", "orders")
-
-    # Built-in "My Account" command — unlike /content, /cart and /orders
-    # (auto-offered whenever there's something to browse/buy), this one is
-    # opt-in per bot: only shown once the owner has turned it on for their
-    # own bot (bot/handlers/tools/shop.py:toggle_my_account). A custom
-    # "/account" the owner defines themselves still wins (setdefault).
-    account_settings = await shop.get_shop_settings(bot_id)
-    if account_settings and account_settings.my_account_enabled:
-        kinds.setdefault("/account", "account")
-
-    # Built-in help command — always offered (unlike /content, /cart and
-    # /orders, which only make sense once there's something to browse/buy),
-    # since a bot always has *some* commands worth explaining. A custom
-    # "/help" the owner defines themselves still wins (setdefault).
-    kinds.setdefault("/help", "help")
-    # Built-in unsubscribe-from-broadcasts command — always offered for the
-    # same reason as /help. A custom "/stop" the owner defines wins too.
-    kinds.setdefault("/stop", "stop")
+    # Shared with the end-user button menu (bot/main_menu.py) so the "/"
+    # list and the keyboard always offer the same commands to the same
+    # people. Built-ins (/content, /cart, /orders, /status, /account, /help,
+    # /stop) are included there only when they make sense for this bot, and
+    # an owner-defined command of the same name always wins.
+    invalidate_menu_cache(bot_id)
+    entries = await collect_bot_commands(bot_id)
+    kinds: dict[str, str] = {e.name: e.kind for e in entries}
+    admin_only: set[str] = {e.name for e in entries if e.admin_only}
 
     def _describe(name: str, kind: str) -> str:
         # /start has dedicated runtime handling regardless of its stored
@@ -422,6 +383,35 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         no closure over a running bot's bot_id) can share it too."""
         return await end_user_prefers_persian(bot_id, tg_user)
 
+    async def _main_menu_for(tg_user):
+        """The button menu (bot/main_menu.py) as THIS user should see it —
+        the owner also gets their admin-only commands. None if the bot
+        offers nothing to put on it."""
+        try:
+            is_fa = await _end_user_prefers_persian(tg_user)
+            return await build_main_menu(bot_id, is_owner=tg_user.id == owner_telegram_id, is_fa=is_fa)
+        except Exception:
+            logger.warning("Failed to build main menu for bot %s", bot_id, exc_info=True)
+            return None
+
+    async def _send_main_menu(message: Message, tg_user, state: FSMContext | None) -> None:
+        """Shows the button menu after a /start that actually completed. A
+        /start still paused behind a gate (force join, guide video, verify)
+        leaves its resume marker / input state behind — no menu yet then;
+        the gate's own resume path calls this once it clears."""
+        if state is not None:
+            if await state.get_state() in _input_state_names:
+                return
+            data = await state.get_data()
+            if "resume_flow_command" in data or "resume_legacy_command_id" in data:
+                return
+        menu = await _main_menu_for(tg_user)
+        if menu is None:
+            return
+        is_fa = await _end_user_prefers_persian(tg_user)
+        text = "👇 از دکمه‌های منوی زیر استفاده کن." if is_fa else "👇 Use the menu buttons below."
+        await message.answer(text, reply_markup=menu)
+
     async def _complete_start(message: Message, user_id: int) -> None:
         await _register_subscriber(user_id, unmute=True)
 
@@ -432,7 +422,9 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             command = result.scalar_one_or_none()
 
         payload = command.payload if command and command.payload else {}
-        await message.answer(_format_start_message(payload))
+        # The welcome message itself carries the button menu, so it shows up
+        # right away without an extra "here's the menu" message.
+        await message.answer(_format_start_message(payload), reply_markup=await _main_menu_for(message.from_user))
 
     async def _send_deep_link_target(target: Message, payload: str) -> None:
         """Jumps straight to whatever a /start deep link
@@ -498,7 +490,7 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         else:
             text = "لغو شد ❌" if is_fa else "Cancelled ❌"
         await state.clear()
-        await message.answer(text, reply_markup=ReplyKeyboardRemove())
+        await message.answer(text, reply_markup=await _main_menu_for(message.from_user) or ReplyKeyboardRemove())
 
     @dp.message(StateFilter(*_input_states), F.text.startswith("/"), ~F.text.regexp(r"^/start(\s|@|$)"))
     async def handle_command_during_input(message: Message, state: FSMContext) -> None:
@@ -512,7 +504,40 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             if is_fa
             else "The previous step was cancelled. Please send your command again."
         )
-        await message.answer(text, reply_markup=ReplyKeyboardRemove())
+        await message.answer(text, reply_markup=await _main_menu_for(message.from_user) or ReplyKeyboardRemove())
+
+    async def _menu_tap(message: Message) -> dict[str, str] | bool:
+        """Filter: is this plain text one of the bot's menu buttons? Injects
+        the matching command as `menu_command`."""
+        if not message.text or message.text.startswith("/") or message.from_user is None:
+            return False
+        command = await command_for_label(
+            bot_id, message.text, is_owner=message.from_user.id == owner_telegram_id
+        )
+        return {"menu_command": command} if command else False
+
+    @dp.message(_menu_tap)
+    async def handle_menu_tap(message: Message, state: FSMContext, menu_command: str) -> None:
+        """A tap on the button menu (bot/main_menu.py) runs that command
+        exactly as if it had been typed. Registered ahead of the input-state
+        handlers' plain-text capture, so a menu tap mid-step abandons the
+        step instead of being saved as its answer."""
+        if await state.get_state() in _input_state_names:
+            await state.set_state(None)
+        command_message = message.model_copy(update={"text": menu_command})
+        await _register_subscriber(message.from_user.id)
+        if await _run_command_by_name(menu_command, command_message, state):
+            return
+        builtin = {
+            "/content": handle_content_command,
+            "/cart": handle_cart_command,
+            "/orders": handle_orders_command,
+            "/account": handle_account_command,
+            "/status": handle_status_command,
+            "/help": handle_default_help,
+        }.get(menu_command)
+        if builtin is not None:
+            await builtin(command_message)
 
     @dp.message(CommandStart())
     async def handle_start(message: Message, state: FSMContext) -> None:
@@ -552,6 +577,7 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
                         # Not gated — pending_deep_link (stashed above) would
                         # otherwise sit unused, so fire it now instead.
                         await _send_deep_link_target(message, deep_link_payload)
+                await _send_main_menu(message, message.from_user, state)
                 return
 
         if built_bot and built_bot.force_join_enabled:
@@ -632,6 +658,7 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             )
             if deep_link_payload:
                 await _send_deep_link_target(tapper_message, deep_link_payload)
+            await _send_main_menu(tapper_message, callback.from_user, state)
             return
 
         await _complete_start(tapper_message, callback.from_user.id)
@@ -1906,6 +1933,66 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             )
         await message.answer(text)
 
+    @dp.message(CommandFilter("status"))
+    async def handle_status_command(message: Message) -> None:
+        """"My subscription" — shows this user's time-limited subscription
+        (BotSubscriber.subscription_until) and access level, plus buy/renew
+        buttons for the bot's plans. Offered on the menu only when the bot
+        sells subscription/access products (main_menu.has_subscription_offer)."""
+        is_fa = await _end_user_prefers_persian(message.from_user)
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(BotSubscriber).where(
+                    BotSubscriber.bot_id == bot_id, BotSubscriber.telegram_id == message.from_user.id
+                )
+            )
+            subscriber = result.scalar_one_or_none()
+
+        now = datetime.now(timezone.utc)
+        until = subscriber.subscription_until if subscriber else None
+        if until is not None and until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        active = until is not None and until > now
+
+        lines = ["💎 وضعیت اشتراک من" if is_fa else "💎 My subscription", ""]
+        if active:
+            days_left = max(0, (until - now).days)
+            if is_fa:
+                lines += ["✅ اشتراکت فعاله", f"📅 تا تاریخ: {until:%Y-%m-%d}", f"⏳ {days_left} روز باقی مونده"]
+            else:
+                lines += ["✅ Your subscription is active", f"📅 Until: {until:%Y-%m-%d}", f"⏳ {days_left} day(s) left"]
+        elif until is not None:
+            lines.append(
+                f"⛔️ اشتراکت در تاریخ {until:%Y-%m-%d} تموم شده."
+                if is_fa
+                else f"⛔️ Your subscription ended on {until:%Y-%m-%d}."
+            )
+        else:
+            lines.append("هنوز اشتراک فعالی نداری." if is_fa else "You don't have an active subscription yet.")
+
+        if subscriber is not None and subscriber.access_level:
+            lines.append(
+                f"🎖 سطح دسترسی: {subscriber.access_level}"
+                if is_fa
+                else f"🎖 Access level: {subscriber.access_level}"
+            )
+
+        plans = await premium_content.get_subscription_plans(bot_id)
+        rows = []
+        for plan in plans[:6]:
+            price = pricing.format_price(plan.price, plan.original_price)
+            if is_fa:
+                price = price.replace("Toman", "تومان")
+            verb = ("🔄 تمدید" if is_fa else "🔄 Renew") if active else ("🛒 خرید" if is_fa else "🛒 Buy")
+            rows.append([InlineKeyboardButton(text=f"{verb}: {plan.name} — {price}", callback_data=f"shop_product:{plan.id}")])
+        if rows:
+            lines += ["", "👇 پلن‌های اشتراک:" if is_fa else "👇 Subscription plans:"]
+
+        await message.answer(
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None,
+        )
+
     @dp.message(CommandFilter("stop"))
     async def handle_stop_broadcasts(message: Message) -> None:
         """Sets BotSubscriber.muted (bot/db/models.py) so
@@ -2680,6 +2767,7 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
             if await _should_use_flow_for_start(bot_id, built_bot):
                 await _register_subscriber(message.from_user.id, unmute=True)
                 await run_flow(bot, bot_id, built_bot.flow_definition, "/start", message, state)
+                await _send_main_menu(message, message.from_user, state)
                 return True
 
             if built_bot and built_bot.force_join_enabled:
@@ -2816,12 +2904,12 @@ async def _run_bot(bot_id: uuid.UUID, token: str) -> None:
         if item is None:
             is_fa = await _end_user_prefers_persian(message.from_user)
             fallback = (
-                "🤔 متوجه نشدم. برای دیدن دستورهای این ربات، دکمه‌ی «/» کنار جعبه‌ی پیام رو بزن."
+                "🤔 متوجه نشدم. از دکمه‌های منوی پایین صفحه استفاده کن، یا دکمه‌ی «/» کنار جعبه‌ی پیام رو بزن."
                 if is_fa
-                else "🤔 I didn't understand that. Tap the \"/\" button next to the message "
-                "box to see this bot's commands."
+                else "🤔 I didn't understand that. Use the menu buttons below, or tap the \"/\" "
+                "button next to the message box to see this bot's commands."
             )
-            await message.answer(fallback)
+            await message.answer(fallback, reply_markup=await _main_menu_for(message.from_user))
             return
 
         await _register_subscriber(message.from_user.id)
