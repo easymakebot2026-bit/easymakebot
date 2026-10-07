@@ -207,6 +207,18 @@ async def _open(message: Message, state: FSMContext, is_fa: bool) -> None:
     await message.answer(text, reply_markup=show_commands_button(is_fa))
 
 
+# Registered before every DefineCommandStates handler (aiogram dispatches in
+# registration order): otherwise tapping "Show Commands" while the wizard
+# waits for a command name is swallowed as an invalid name. State is kept,
+# so the owner can still type the name afterwards.
+@router.message(F.text.in_(frozenset({"📋 Show Commands", "📋 نمایش دستورها"})))
+async def show_commands(message: Message, state: FSMContext) -> None:
+    is_fa = await owner_prefers_persian(message.from_user)
+    data = await state.get_data()
+    bot_id = data.get("active_bot_id")
+    await _send_command_list(message, bot_id, is_fa)
+
+
 @router.message(F.text.in_(tool_button_texts("define_command")))
 async def start_define_command(message: Message, state: FSMContext) -> None:
     is_fa = await owner_prefers_persian(message.from_user)
@@ -878,14 +890,6 @@ async def _send_command_list(message: Message, bot_id, is_fa: bool) -> None:
     if keyboard is not None:
         hint = "برای حذف یه دستور، روی دکمه‌ش بزن:" if is_fa else "Tap a command below to delete it:"
         await message.answer(hint, reply_markup=keyboard)
-
-
-@router.message(F.text.in_(frozenset({"📋 Show Commands", "📋 نمایش دستورها"})))
-async def show_commands(message: Message, state: FSMContext) -> None:
-    is_fa = await owner_prefers_persian(message.from_user)
-    data = await state.get_data()
-    bot_id = data.get("active_bot_id")
-    await _send_command_list(message, bot_id, is_fa)
 
 
 @router.callback_query(F.data.startswith("cmd:delete_confirm:"))
