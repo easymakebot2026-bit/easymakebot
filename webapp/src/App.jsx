@@ -17,7 +17,7 @@ import { NodeActionsContext } from './FlowContext.js'
 import Palette from './Palette.jsx'
 import ContentManager from './ContentManager.jsx'
 import MessageComposer from './MessageComposer.jsx'
-import { initTelegramApp, getBotId, loadFlow, saveFlow } from './telegram.js'
+import { initTelegramApp, getBotId, loadFlow, saveFlow, loadBotInfo } from './telegram.js'
 
 let nextId = 1
 function newNodeId() {
@@ -28,6 +28,7 @@ function Canvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [status, setStatus] = useState('Loading…')
+  const [botInfo, setBotInfo] = useState(null)
   const [managingContent, setManagingContent] = useState(false)
   const [editingMessageNodeId, setEditingMessageNodeId] = useState(null)
   const wrapperRef = useRef(null)
@@ -39,6 +40,10 @@ function Canvas() {
       setStatus('ربات انتخاب نشده — اول از «ربات‌های من» واردش شو، بعد سازنده‌ی بصری رو باز کن. / No bot selected — open it from "My bots" first.')
       return
     }
+
+    loadBotInfo()
+      .then(setBotInfo)
+      .catch(() => {}) // badge is cosmetic — never block the canvas on it
 
     loadFlow()
       .then((flow) => {
@@ -152,6 +157,12 @@ function Canvas() {
       <div className="builder">
         <Palette onDropBlock={handleDropBlock} />
         <div className="canvas-area" ref={wrapperRef}>
+          {botInfo && (
+            <div className="bot-badge" title={botInfo.display_name}>
+              <span className="bot-badge-name" dir="auto">🤖 {botInfo.display_name}</span>
+              {botInfo.username && <span className="bot-badge-user" dir="ltr">@{botInfo.username}</span>}
+            </div>
+          )}
           <div className="topbar">
             <span className="status">{status}</span>
             <button className="save-button" onClick={handleSave}>

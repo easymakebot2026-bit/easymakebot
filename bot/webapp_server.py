@@ -238,6 +238,15 @@ def create_app(bot_token: str) -> web.Application:
             return web.json_response({"error": "unauthorized"}, status=401)
         return web.json_response(built_bot.flow_definition or {"nodes": [], "edges": []})
 
+    async def get_bot_info(request: web.Request) -> web.Response:
+        """Name/username of the bot being edited, shown as a badge on the canvas."""
+        built_bot = await _authenticated_bot(request, bot_token)
+        if built_bot is None:
+            return web.json_response({"error": "unauthorized"}, status=401)
+        return web.json_response(
+            {"display_name": built_bot.display_name, "username": built_bot.bot_username}
+        )
+
     async def save_flow(request: web.Request) -> web.Response:
         built_bot = await _authenticated_bot(request, bot_token)
         if built_bot is None:
@@ -658,6 +667,7 @@ def create_app(bot_token: str) -> web.Application:
 
     app.router.add_get("/api/flow", get_flow)
     app.router.add_post("/api/flow", save_flow)
+    app.router.add_get("/api/bot", get_bot_info)
     app.router.add_get("/api/content", list_content)
     app.router.add_post("/api/content", create_content)
     app.router.add_put("/api/content/{item_id}", update_content)

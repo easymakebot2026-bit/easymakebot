@@ -44,6 +44,10 @@ export function loadFlow() {
   return apiRequest('/api/flow', 'GET')
 }
 
+export function loadBotInfo() {
+  return apiRequest('/api/bot', 'GET')
+}
+
 export function saveFlow(flow) {
   return apiRequest('/api/flow', 'POST', flow)
 }
