@@ -23,7 +23,7 @@ async def set_builder_menu_button(bot: Bot, chat_id: int, webapp_url: str, bot_i
         await bot.set_chat_menu_button(
             chat_id=chat_id,
             menu_button=MenuButtonWebApp(
-                text="🎨 سازنده‌ی بصری" if is_fa else "🎨 Visual Builder",
+                text="Visual Builder",
                 web_app=WebAppInfo(url=f"{webapp_url}?bot_id={bot_id}"),
             ),
         )
