@@ -7,6 +7,7 @@ from aiogram.types import Message
 from sqlalchemy import select
 
 from bot import help_text
+from bot.builder_menu import set_builder_menu_button
 from bot.config import load_config
 from bot.db.base import async_session_maker, telegram_bot_id_from_token
 from bot.db.models import BuiltBot, User
@@ -148,6 +149,7 @@ async def receive_token(message: Message, state: FSMContext) -> None:
             "once you're done setting it up, send /live to go live."
         )
     await message.answer(text, reply_markup=tools_reply_keyboard(is_fa))
+    await set_builder_menu_button(message.bot, message.chat.id, _config.webapp_url, built_bot.id, is_fa)
 
     webapp_kb = webapp_keyboard(_config.webapp_url, built_bot.id, is_fa)
     if webapp_kb is not None:

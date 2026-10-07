@@ -5,6 +5,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
 from bot import help_text, live
+from bot.builder_menu import set_builder_menu_button
 from bot.config import load_config
 from bot.db.base import async_session_maker
 from bot.db.models import BuiltBot, User
@@ -94,6 +95,9 @@ async def select_bot(callback: CallbackQuery, state: FSMContext) -> None:
             "Please use the tool below to develop your bot."
         )
     await callback.message.answer(text, reply_markup=tools_reply_keyboard(is_fa))
+    await set_builder_menu_button(
+        callback.bot, callback.message.chat.id, _config.webapp_url, built_bot.id, is_fa
+    )
 
     webapp_kb = webapp_keyboard(_config.webapp_url, built_bot.id, is_fa)
     if webapp_kb is not None:

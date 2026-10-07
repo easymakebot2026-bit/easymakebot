@@ -36,7 +36,7 @@ function Canvas() {
   useEffect(() => {
     const botId = getBotId()
     if (!botId) {
-      setStatus('Missing bot_id — open this page from the bot\'s "Visual Builder" button.')
+      setStatus('ربات انتخاب نشده — اول از «ربات‌های من» واردش شو، بعد سازنده‌ی بصری رو باز کن. / No bot selected — open it from "My bots" first.')
       return
     }
 
