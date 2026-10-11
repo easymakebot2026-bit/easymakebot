@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="fa">
+<head>
+<meta charset="utf-8">
+<style>
+@font-face { font-family: Vazir; src: url(../node_modules/vazirmatn/fonts/webfonts/Vazirmatn[wght].woff2) format("woff2"); font-weight: 100 900; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 1080px; height: 1920px; overflow: hidden; background: #0e1621; }
+body { font-family: Vazir, "Noto Color Emoji", sans-serif; color: #fff; position: relative; }
+#bg { position: absolute; inset: 0; background: radial-gradient(1200px 900px at 20% 0%, #2a6ad8 0%, transparent 60%), radial-gradient(900px 900px at 100% 100%, #7b3fe4 0%, transparent 55%), #0b1220; }
+
+/* caption */
+#cap { position: absolute; top: 70px; left: 60px; right: 60px; height: 300px; direction: rtl; text-align: center; }
+#cap .step { display: inline-block; background: #ffd23f; color: #1b1b1b; font-weight: 900; font-size: 40px; padding: 6px 30px; border-radius: 40px; }
+#cap .title { font-size: 66px; font-weight: 900; margin-top: 22px; line-height: 1.3; text-shadow: 0 4px 20px rgba(0,0,0,.4); }
+#cap .sub { font-size: 38px; font-weight: 500; margin-top: 10px; opacity: .85; }
+
+/* phone */
+#phone { position: absolute; left: 110px; top: 400px; width: 860px; height: 1330px; border-radius: 70px; background: #000; padding: 22px; box-shadow: 0 40px 120px rgba(0,0,0,.6), 0 0 0 3px #333 inset; }
+#screen { position: relative; width: 100%; height: 100%; border-radius: 52px; overflow: hidden; background: #e6ebee; display: flex; flex-direction: column; }
+#hdr { height: 130px; background: #517da2; display: flex; align-items: center; padding: 30px 30px 0; gap: 22px; flex-shrink: 0; }
+#hdr .back { font-size: 46px; }
+#hdr .av { width: 74px; height: 74px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 38px; font-weight: 800; }
+#hdr .nm { font-size: 34px; font-weight: 700; }
+#hdr .st { font-size: 25px; opacity: .8; }
+#chat { flex: 1; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: 20px 22px; gap: 14px;
+  background: linear-gradient(160deg, #c9dbb4, #a9c69a 50%, #d2dcb0); }
+.msg { max-width: 82%; padding: 16px 22px 14px; border-radius: 26px; font-size: 29px; line-height: 1.55; color: #111; white-space: pre-wrap; unicode-bidi: plaintext; text-align: start; box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+.in { align-self: flex-start; background: #fff; border-bottom-left-radius: 6px; }
+.out { align-self: flex-end; background: #effdde; border-bottom-right-radius: 6px; }
+.blur { filter: blur(7px); }
+.ph-msg { padding: 8px; width: 62%; }
+.ph-msg .pic { height: 380px; border-radius: 20px; background: linear-gradient(135deg,#ff9aae,#ffd1dc 45%,#f6a5c0); display: flex; align-items: center; justify-content: center; font-size: 150px; }
+.ph-msg .cap { padding: 12px 14px 6px; }
+.inl { align-self: flex-start; width: 82%; display: flex; flex-direction: column; gap: 6px; margin-top: -8px; }
+.inl div { background: rgba(70,110,80,.55); color: #fff; text-align: center; font-size: 27px; font-weight: 600; padding: 14px; border-radius: 16px; }
+#kb { background: #f1f1f1; padding: 12px; display: grid; gap: 10px; flex-shrink: 0; }
+#kb .row { display: flex; gap: 10px; }
+#kb .b { flex: 1; background: #fff; color: #222; border-radius: 14px; text-align: center; font-size: 27px; font-weight: 600; padding: 20px 8px; box-shadow: 0 2px 0 #c9c9c9; }
+.tap { background: #8ec5ff !important; transform: scale(.94); box-shadow: 0 0 0 6px rgba(42,130,230,.5) !important; }
+#input { height: 100px; background: #fff; display: flex; align-items: center; padding: 0 30px; gap: 20px; flex-shrink: 0; color: #999; font-size: 30px; }
+#input .tx { flex: 1; color: #111; unicode-bidi: plaintext; text-align: start; white-space: nowrap; overflow: hidden; }
+#input .ph { color: #9aa; }
+#input .send { width: 66px; height: 66px; border-radius: 50%; background: #5ea2de; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 30px; }
+.caret { display: inline-block; width: 3px; height: 34px; background: #3a8be0; vertical-align: middle; }
+
+/* note */
+#note { position: absolute; left: 90px; right: 90px; bottom: 60px; direction: rtl; text-align: center; font-size: 36px; font-weight: 700; background: #ff5a5f; color: #fff; padding: 22px 30px; border-radius: 30px; box-shadow: 0 10px 40px rgba(0,0,0,.4); }
+#brand { position: absolute; bottom: 70px; left: 0; right: 0; text-align: center; font-size: 40px; font-weight: 800; opacity: .9; direction: ltr; }
+
+/* full-screen cards */
+.card { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; direction: rtl; text-align: center; padding: 80px; background: radial-gradient(1000px 1000px at 50% 30%, #2f6fe0, #0b1220 70%); }
+.card .big { font-size: 110px; font-weight: 900; line-height: 1.25; }
+.card .mid { font-size: 52px; font-weight: 600; margin-top: 40px; opacity: .9; line-height: 1.5; }
+.card .emoji { font-size: 200px; margin-bottom: 30px; }
+.card .handle { font-size: 96px; font-weight: 900; direction: ltr; margin-top: 30px; background: #ffd23f; color: #111; padding: 10px 50px; border-radius: 30px; }
+.card .chips { display: flex; flex-direction: column; gap: 20px; margin-top: 50px; font-size: 48px; font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="bg"></div>
+<div id="cap"></div>
+<div id="phone"><div id="screen">
+  <div id="hdr"></div>
+  <div id="chat"></div>
+  <div id="kb"></div>
+  <div id="input"></div>
+</div></div>
+<div id="note" style="display:none"></div>
+<div id="brand">@easymakebot</div>
+<div id="intro" class="card"></div>
+<div id="outro" class="card" style="display:none"></div>
+
+<script>
+// ---------- timeline builder ----------
+const scenes = [];
+let cur = null, T = 0, INTRO_END = 2.8, INTRO_HTML = "", OUTRO_HTML = "";
+function scene(header) { cur = { start: T, header, events: [] }; scenes.push(cur); }
+function wait(s) { T += s; }
+function caption(step, title, sub) { cur.events.push({ t: T, type: "cap", step, title, sub }); }
+function note(text, dur) { cur.events.push({ t: T, type: "note", text, end: T + dur }); }
+function inc(text, opts = {}) { cur.events.push({ t: T, type: "msg", side: "in", text, ...opts }); if (opts.kb !== undefined) cur.events.push({ t: T, type: "kb", kb: opts.kb }); }
+function kb(rows) { cur.events.push({ t: T, type: "kb", kb: rows }); }
+function typed(text, dur = 1.0, opts = {}) { cur.events.push({ t: T, type: "typing", text, end: T + dur, blur: opts.blur }); T += dur; cur.events.push({ t: T, type: "msg", side: "out", text, blur: opts.blur }); }
+function tap(label) { cur.events.push({ t: T, type: "tap", label, end: T + 0.45 }); T += 0.45; cur.events.push({ t: T, type: "msg", side: "out", text: label }); }
+function tapInline(label) { cur.events.push({ t: T, type: "tapi", label, end: T + 0.5 }); T += 0.5; }
+
+</script>
+<script>document.write('<script src="'+(new URLSearchParams(location.search).get('r')||'reel1')+'.js"><\/script>')</script>
+<script>
+const OUTRO_START = T;
+const TOTAL = T + 4.0;
+window.TOTAL = TOTAL;
+
+// ---------- renderer ----------
+const $ = id => document.getElementById(id);
+const ease = x => 1 - Math.pow(1 - Math.min(Math.max(x, 0), 1), 3);
+const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/(https?:\/\/[^\s)]*|[@\/][A-Za-z_][A-Za-z0-9_]*)/g, '<bdi dir="ltr">$1</bdi>');
+
+document.fonts && document.fonts.load("700 40px Vazir");
+
+$("intro").innerHTML = INTRO_HTML;
+$("outro").innerHTML = OUTRO_HTML;
+
+let lastKey = "";
+function render(t) {
+  // intro / outro
+  const ia = t < INTRO_END - 0.4 ? 1 : 1 - ease((t - (INTRO_END - 0.4)) / 0.4);
+  $("intro").style.display = ia > 0 ? "flex" : "none";
+  $("intro").style.opacity = ia;
+  $("intro").querySelector(".big").style.transform = `scale(${0.9 + 0.1 * ease(t / 0.6)})`;
+  const oa = ease((t - OUTRO_START) / 0.5);
+  $("outro").style.display = oa > 0 ? "flex" : "none";
+  $("outro").style.opacity = oa;
+  if (oa > 0) $("outro").querySelector(".handle").style.transform = `scale(${1 + 0.04 * Math.sin((t - OUTRO_START) * 5)})`;
+
+  let sc = scenes[0];
+  for (const s of scenes) if (s.start <= t) sc = s;
+  const evs = sc.events.filter(e => e.t <= t);
+
+  // header
+  const h = sc.header;
+  $("hdr").innerHTML = `<span class="back">‹</span><div class="av" style="background:${h.color}">${h.av}</div><div><div class="nm">${h.name}</div><div class="st">${h.st}</div></div>`;
+
+  // caption (search whole timeline so captions persist across scenes)
+  let cap = null;
+  for (const s of scenes) for (const e of s.events) if (e.type === "cap" && e.t <= t) cap = e;
+  if (cap) {
+    const a = ease((t - cap.t) / 0.4);
+    $("cap").style.opacity = a;
+    $("cap").style.transform = `translateY(${(1 - a) * 30}px)`;
+    $("cap").innerHTML = `<div class="step">${cap.step}</div><div class="title">${cap.title}</div><div class="sub">${cap.sub}</div>`;
+  }
+
+  // note
+  const nt = evs.filter(e => e.type === "note" && t < e.end).pop();
+  $("note").style.display = nt ? "block" : "none";
+  $("brand").style.display = nt ? "none" : "block";
+  if (nt) { $("note").textContent = nt.text; $("note").style.transform = `scale(${0.85 + 0.15 * ease((t - nt.t) / 0.3)})`; }
+
+  // messages
+  const taps = evs.filter(e => (e.type === "tap" || e.type === "tapi") && t < e.end);
+  let html = "";
+  for (const e of evs) {
+    if (e.type !== "msg") continue;
+    const a = ease((t - e.t) / 0.3);
+    const st = `opacity:${a};transform:translateY(${(1 - a) * 24}px)`;
+    if (e.photo) html += `<div class="msg ${e.side} ph-msg" style="${st}"><div class="pic">${e.photo}</div>${e.text ? `<div class="cap">${esc(e.text)}</div>` : ""}</div>`;
+    else html += `<div class="msg ${e.side}${e.blur ? " blur" : ""}" style="${st}">${esc(e.text)}</div>`;
+    if (e.inline) {
+      html += `<div class="inl" style="opacity:${a}">` + e.inline.map(l => `<div class="${taps.some(x => x.type === "tapi" && x.label === l) ? "tap" : ""}">${esc(l)}</div>`).join("") + `</div>`;
+    }
+  }
+  $("chat").innerHTML = html;
+
+  // keyboard
+  const k = evs.filter(e => e.type === "kb").pop();
+  if (k && k.kb) {
+    $("kb").style.display = "grid";
+    $("kb").innerHTML = k.kb.map(r => `<div class="row">` + r.map(b => `<div class="b${taps.some(x => x.type === "tap" && x.label === b) ? " tap" : ""}">${esc(b)}</div>`).join("") + `</div>`).join("");
+  } else $("kb").style.display = "none";
+
+  // input bar
+  const ty = evs.filter(e => e.type === "typing" && t < e.end).pop();
+  let inner = `<span class="ph">Message</span>`;
+  if (ty) {
+    const chars = [...ty.text];
+    const n = Math.ceil(chars.length * Math.min(1, (t - ty.t) / ((ty.end - ty.t) * 0.85)));
+    inner = `<span class="${ty.blur ? "blur" : ""}">${esc(chars.slice(0, n).join(""))}</span><span class="caret"></span>`;
+  }
+  $("input").innerHTML = `<span>😊</span><div class="tx">${inner}</div><div class="send">➤</div>`;
+}
+window.render = render;
+render(0);
+</script>
+</body>
+</html>

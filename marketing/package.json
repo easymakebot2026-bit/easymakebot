@@ -1,0 +1,9 @@
+{
+  "name": "easymakebot-marketing",
+  "private": true,
+  "description": "Instagram stories/posts/reels for EasyMakeBot",
+  "dependencies": {
+    "playwright-core": "1.56.1",
+    "vazirmatn": "33.0.3"
+  }
+}
