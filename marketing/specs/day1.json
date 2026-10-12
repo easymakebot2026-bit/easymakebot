@@ -1,0 +1,6 @@
+{ "items": [
+  { "src": "images/4.jpg", "out": "out/day1-2026-10-12/story1-stamp.jpg", "size": "story",
+    "blocks": [ { "y": 0.8, "kicker": "📁 پرونده‌ی شماره‌ی ۱", "title": "بسته شد ✅", "body": "چطوری؟ 👇" } ] },
+  { "src": "images/5.jpg", "out": "out/day1-2026-10-12/story3-letter.jpg", "size": "story",
+    "blocks": [ { "y": 0.74, "title": "یه نامه برات دارم ✉️", "body": "ربات خودتو بساز: ۷۲ ساعت رایگان" } ] }
+] }
