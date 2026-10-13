@@ -41,13 +41,25 @@ wait(0.8); tapInline("📁 سطح بالا (بدون دسته)");
 wait(0.2); inc("آیتم اضافه شد ✅", { kb: MENU_KB });
 wait(1.4);
 
+card(`<div class="big" style="font-size:78px">هر پست اینستاگرام<br>یه کد 🔑</div><div class="codes">
+<div class="row"><b>101</b>راهنمای نگهداری گل 🌿</div>
+<div class="row"><b>102</b>کاتالوگ دسته‌گل‌ها 💐</div>
+<div class="row"><b>103</b>کد تخفیف ۲۰٪ 🎁</div>
+<div class="row"><b>104</b>آدرس و ساعت کاری 📍</div>
+<div class="row"><b>105</b>ویدیوی آموزش گل‌آرایی 🎬</div></div>
+<div class="mid" style="font-size:40px;margin-top:36px">هر کد، مستقیم یه محتوای جدا رو باز می‌کنه</div>`, 4.6);
+
 scene(ROSE);
 caption("نتیجه 👇", "مشتری فقط می‌نویسه 101", "و مستقیم می‌رسه به همون محتوا");
 kb(null);
 note("📱 توی پستت بنویس: «کد 101 رو به ربات بفرست»", 2.2);
 wait(0.8); typed("101", 0.6);
 wait(0.5); inc(`📌 ${TITLE}\n\n${BODY}`, { photo: "🌷", inline: ["🔙 بازگشت به لیست"] });
-wait(4.0);
+wait(2.4);
+caption("یه کد دیگه 👇", "103 = یه محتوای دیگه", "هر پست، کد خودش رو داره");
+wait(0.3); typed("103", 0.6);
+wait(0.5); inc("📌 کد تخفیف ۲۰٪ 🎁\n\nموقع سفارش بگو «RZ20» تا ۲۰٪ تخفیف بگیری.\nفقط تا آخر هفته ⏳", { inline: ["🔙 بازگشت به لیست"] });
+wait(3.2);
 
 INTRO_HTML = `<div class="emoji">🔑</div><div class="big">«کد ۱۰۱ رو<br>به ربات بفرست»</div><div class="mid">اینستاگرامت رو به ربات تلگرامت وصل کن<br>بدون برنامه‌نویسی</div>`;
 OUTRO_HTML = `<div class="big">کد میان‌بر<br>توی ربات خودت</div><div class="handle">@easymakebot</div><div class="chips"><div>⏱ ۷۲ ساعت رایگان</div><div>🔗 لینک در بیو</div></div>`;
