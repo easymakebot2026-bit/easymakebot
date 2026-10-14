@@ -1,0 +1,4 @@
+{ "items": [
+  { "src": "images/9.jpg", "out": "out/day3-2026-10-14/story1-question.jpg", "size": "story", "qmark": { "x": 0.5, "y": 0.485 },
+    "blocks": [ { "y": 0.74, "kicker": "📁 پرونده‌ی شماره‌ی ۲", "title": "هنوز جواب ندادی؟ 🤔", "body": "مقصر کیه؟ ساعت ۱۱ لو می‌ره 🔓" } ] }
+] }
