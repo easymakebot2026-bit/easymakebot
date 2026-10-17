@@ -12,6 +12,7 @@ const path = require('path');
   if (mode === 'preview') {
     for (const t of process.argv.slice(3).map(Number)) {
       await page.evaluate(t => render(t), t);
+      await page.evaluate(() => Promise.all([...document.images].map(im => im.complete ? 0 : im.decode().catch(() => 0))));
       await page.screenshot({ path: path.join(__dirname, `prev_${process.env.REEL||'reel1'}_${t}.png`) });
     }
   } else {
@@ -19,6 +20,7 @@ const path = require('path');
     const ff = spawn('ffmpeg', ['-y', '-f', 'image2pipe', '-framerate', String(fps), '-i', '-', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-preset', 'medium', '-movflags', '+faststart', path.join(__dirname, 'easymakebot_' + (process.env.REEL || 'reel1') + '.mp4')], { stdio: ['pipe', 'ignore', 'inherit'] });
     for (let i = 0; i < n; i++) {
       await page.evaluate(t => render(t), i / fps);
+      await page.evaluate(() => Promise.all([...document.images].map(im => im.complete ? 0 : im.decode().catch(() => 0))));
       const buf = await page.screenshot({ type: 'jpeg', quality: 92 });
       if (!ff.stdin.write(buf)) await new Promise(r => ff.stdin.once('drain', r));
     }

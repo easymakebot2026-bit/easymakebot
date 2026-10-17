@@ -30,6 +30,12 @@ body { font-family: Vazir, "Noto Color Emoji", sans-serif; color: #fff; position
 .out { align-self: flex-end; background: #effdde; border-bottom-right-radius: 6px; }
 .blur { filter: blur(7px); }
 .ph-msg { padding: 8px; width: 62%; }
+#mini { position: absolute; inset: 0; background: #fff; display: flex; flex-direction: column; z-index: 5; }
+#mini .mhdr { height: 110px; padding: 34px 26px 0; display: flex; align-items: center; justify-content: space-between; background: #517da2; color: #fff; font-size: 27px; direction: ltr; }
+#mini .mhdr b { font-size: 31px; }
+#mini .mview { position: relative; flex: 1; overflow: hidden; }
+#mimg { width: 100%; display: block; }
+#finger { position: absolute; width: 64px; height: 64px; margin: -32px 0 0 -32px; border-radius: 50%; background: rgba(40,40,40,.28); border: 4px solid rgba(255,255,255,.9); box-shadow: 0 4px 14px rgba(0,0,0,.35); display: none; }
 .doc-msg { padding: 14px 18px; }
 .doc-msg .doc { display: flex; align-items: center; gap: 18px; direction: ltr; }
 .doc-msg .ic { width: 78px; height: 78px; border-radius: 50%; background: #5ea2de; display: flex; align-items: center; justify-content: center; font-size: 40px; }
@@ -74,6 +80,7 @@ body { font-family: Vazir, "Noto Color Emoji", sans-serif; color: #fff; position
   <div id="chat"></div>
   <div id="kb"></div>
   <div id="input"></div>
+  <div id="mini" style="display:none"><div class="mhdr"><span>✕ Close</span><b>🎨 سازنده‌ی بصری</b><span>⋮</span></div><div class="mview"><img id="mimg"><div id="finger"></div></div></div>
 </div></div>
 <div id="note" style="display:none"></div>
 <div id="brand">@easymakebot</div>
@@ -88,6 +95,7 @@ let cur = null, T = 0, INTRO_END = 2.8, INTRO_HTML = "", OUTRO_HTML = "";
 function scene(header) { cur = { start: T, header, events: [] }; scenes.push(cur); }
 function wait(s) { T += s; }
 function caption(step, title, sub) { cur.events.push({ t: T, type: "cap", step, title, sub }); }
+function screen(dir, tl, dur) { cur.events.push({ t: T, type: "screen", dir, tl, end: T + dur }); T += dur; }
 function card(html, dur) { cur.events.push({ t: T, type: "card", html, end: T + dur }); T += dur; }
 function note(text, dur) { cur.events.push({ t: T, type: "note", text, end: T + dur }); }
 function inc(text, opts = {}) { cur.events.push({ t: T, type: "msg", side: "in", text, ...opts }); if (opts.kb !== undefined) cur.events.push({ t: T, type: "kb", kb: opts.kb }); }
@@ -97,7 +105,7 @@ function tap(label) { cur.events.push({ t: T, type: "tap", label, end: T + 0.45 
 function tapInline(label) { cur.events.push({ t: T, type: "tapi", label, end: T + 0.5 }); T += 0.5; }
 
 </script>
-<script>document.write('<script src="'+(new URLSearchParams(location.search).get('r')||'reel1')+'.js"><\/script>')</script>
+<script>document.write('<script src="assets/builder/timeline.js"><\/script>');document.write('<script src="'+(new URLSearchParams(location.search).get('r')||'reel1')+'.js"><\/script>')</script>
 <script>
 const OUTRO_START = T;
 const TOTAL = T + 4.0;
@@ -120,6 +128,17 @@ function render(t) {
   $("intro").style.display = ia > 0 ? "flex" : "none";
   $("intro").style.opacity = ia;
   $("intro").querySelector(".big").style.transform = `scale(${0.9 + 0.1 * ease(t / 0.6)})`;
+  let sc2 = null;
+  for (const s of scenes) for (const e of s.events) if (e.type === "screen" && e.t <= t && t < e.end) sc2 = e;
+  if (sc2) {
+    $("mini").style.display = "flex";
+    const fi = Math.min(sc2.tl.frames.length - 1, Math.floor((t - sc2.t) * sc2.tl.fps));
+    const src = `${sc2.dir}/${String(fi).padStart(4, "0")}.jpg`;
+    if ($("mimg").getAttribute("src") !== src) $("mimg").setAttribute("src", src);
+    const pt = sc2.tl.frames[fi].pointer, fg = $("finger");
+    if (pt) { const k = $("mimg").clientWidth / sc2.tl.width; fg.style.display = "block"; fg.style.left = pt.x * k + "px"; fg.style.top = pt.y * k + "px"; fg.style.transform = pt.down ? "scale(.8)" : "scale(1)"; fg.style.background = pt.down ? "rgba(42,130,230,.45)" : "rgba(40,40,40,.28)"; }
+    else fg.style.display = "none";
+  } else $("mini").style.display = "none";
   let mc = null;
   for (const s of scenes) for (const e of s.events) if (e.type === "card" && e.t <= t && t < e.end) mc = e;
   if (mc) {
