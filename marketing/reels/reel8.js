@@ -14,7 +14,12 @@ INTRO_END = 3.2;
 T = INTRO_END;
 
 scene(EMB);
-caption("قدم ۱", "از کجا بازش کنم؟ 🤔", "از «ربات‌های من» رباتت رو انتخاب کن");
+card(`<div class="big" style="font-size:76px">سازنده‌ی بصری چیه؟ 🤔</div><div class="codes">
+<div class="row"><b>🧩</b>بلوک = یه کار (پیام، فروشگاه، جوین…)</div>
+<div class="row"><b>🔗</b>خط بین بلوک‌ها = ترتیب اجرا</div>
+<div class="row"><b>💾</b>Save = همون لحظه روی رباتت اعمال می‌شه</div></div>
+<div class="mid" style="font-size:40px;margin-top:34px">مسیر رباتت رو می‌چینی، بدون کد ✨</div>`, 5.0);
+caption("اول", "از کجا بازش کنم؟ 🤔", "«🤖 ربات‌های من» ← رباتت رو انتخاب کن");
 kb(MAIN_KB);
 wait(0.6); tap("🤖 ربات‌های من");
 wait(0.3); inc("ربات‌های تو:", { inline: ["🤖 فروشگاه گل رز", "➕ ساخت ربات جدید"] });
@@ -23,19 +28,23 @@ wait(0.3); inc("وارد محیط ساخت‌وساز ربات «فروشگاه 
 wait(0.5); inc("دوست داری از بوم بصری استفاده کنی؟ سازنده‌ی درگ‌اند‌دراپ رو باز کن:", { inline: ["🎨 سازنده‌ی بصری"] });
 wait(1.4);
 caption("👆 اینجا", "دکمه‌ی «🎨 سازنده‌ی بصری»", "داخل خود تلگرام باز می‌شه، بدون نصب برنامه");
-wait(1.6); tapInline("🎨 سازنده‌ی بصری");
+wait(1.3); tapInline("🎨 سازنده‌ی بصری");
 
 // --- the real Mini App -------------------------------------------------
 const segStart = {};
 TL.frames.forEach((f, i) => { if (!(f.seg in segStart)) segStart[f.seg] = i / TL.fps; });
 const SEG_CAPTIONS = {
-  blocks: ["🧩 بلوک‌ها", "۹ بلوک آماده", "پیام، فروشگاه، جوین اجباری، محتوا و…"],
-  trigger: ["قدم ۲", "▶️ Trigger = دستور", "مثلاً /start: مسیر ربات از اینجا شروع می‌شه"],
-  gate: ["قدم ۳", "🔒 جوین اجباری", "بکش، بنداز، با یه خط به قبلی وصلش کن"],
-  message: ["قدم ۴", "💬 پیام خوش‌آمد", "یه بلوک پیام، بعد از جوین اجباری"],
-  composer: ["قدم ۴", "✏️ متن و دکمه‌ی لینک", "عکس، ویدیو، فایل و چند پیام پشت سر هم هم می‌شه"],
-  shop: ["قدم ۵", "🛍 فروشگاه، آخر مسیر", "محصولاتی که توی ربات تعریف کردی"],
-  save: ["قدم ۶", "💾 Save و تمام!", "رباتت همین الان به‌روز شد ✅"],
+  canvas: ["🎨 صفحه‌ی سازنده", "اینجا بوم رباتته", "پایین: بلوک‌ها  |  بالا: دکمه‌ی Save"],
+  blocks: ["🧩 بلوک‌ها", "هر بلوک = یه کار", "پیام، فروشگاه، جوین اجباری، محتوا و… بکش تا همه رو ببینی"],
+  trigger: ["قدم ۱", "▶️ Trigger رو بکش روی بوم", "یعنی دستور ‎/start: مسیر ربات از اینجا شروع می‌شه"],
+  gate: ["قدم ۲", "🔒 بلوک جوین اجباری", "کاربر اول باید عضو کانالت بشه"],
+  connect: ["🔗 مهم‌ترین نکته", "نقطه‌ی آبی رو بکش روی بلوک بعدی", "این خط یعنی: «بعد از این، اون اجرا بشه»"],
+  message: ["قدم ۳", "💬 بلوک پیام رو اضافه و وصل کن", "بعد از عضویت، این پیام برای کاربر میاد"],
+  composer: ["قدم ۴", "✏️ روی Edit Message بزن", "متن خوش‌آمدت رو بنویس، فارسی هم کاملاً اوکیه"],
+  button: ["قدم ۵", "🔗 یه دکمه‌ی لینک بذار", "متن دکمه + آدرس سایت، بعد Save"],
+  shop: ["قدم ۶", "🛍 فروشگاه، آخر مسیر", "محصولاتت بعد از پیام خوش‌آمد نشون داده می‌شن"],
+  fit: ["👀 کل مسیر", "دکمه‌ی ⛶ همه‌چی رو یه‌جا نشون می‌ده", "‎/start ← جوین ← پیام ← فروشگاه"],
+  save: ["قدم ۷", "💾 Save رو بزن", "همین! رباتت همون لحظه به‌روز شد ✅"],
 };
 const SHOW_START = T + 0.4;
 const SHOW_DUR = TL.frames.length / TL.fps;
@@ -43,30 +52,28 @@ for (const [seg, c] of Object.entries(SEG_CAPTIONS)) {
   const keep = T; T = SHOW_START + (segStart[seg] || 0); caption(...c); T = keep;
 }
 wait(0.4);
-screen("assets/builder", TL, SHOW_DUR + 0.6);
+screen("assets/builder", TL, SHOW_DUR + 0.2);
 
-card(`<div class="big" style="font-size:70px">۹ بلوک، هر کاری 🧩</div><div class="codes">
-<div class="row"><b>▶️</b>Trigger: دستور شروع (/start، /menu…)</div>
-<div class="row"><b>💬</b>Send Message: متن، عکس، دکمه</div>
-<div class="row"><b>🔒</b>Force Join: اول عضویت کانال</div>
-<div class="row"><b>📚</b>Content List: آموزش‌ها و فایل‌ها</div>
-<div class="row"><b>🛍</b>Shop: فروشگاه و سبد خرید</div>
-<div class="row"><b>📦</b>Order Status: پیگیری سفارش</div>
-<div class="row"><b>🪪</b>Verify: احراز هویت مشتری</div>
-<div class="row"><b>📖</b>Guide & Video: راهنمای ویدیویی</div>
-<div class="row"><b>📢</b>Broadcast: پیام همگانی</div></div>`, 6.5);
+card(`<div class="big" style="font-size:68px">مسیری که ساختیم 👇</div><div class="codes">
+<div class="row"><b>▶️</b>کاربر ‎/start رو می‌زنه</div>
+<div class="row" style="justify-content:center;background:none;border:none;padding:0">⬇️</div>
+<div class="row"><b>🔒</b>اول باید عضو کانالت بشه</div>
+<div class="row" style="justify-content:center;background:none;border:none;padding:0">⬇️</div>
+<div class="row"><b>💬</b>پیام خوش‌آمد + دکمه‌ی سایت</div>
+<div class="row" style="justify-content:center;background:none;border:none;padding:0">⬇️</div>
+<div class="row"><b>🛍</b>فروشگاه و محصولات</div></div>`, 4.6);
 
 // --- result for a customer ---------------------------------------------
 scene(ROSE);
-caption("نتیجه 👇", "مشتری /start می‌زنه", "دقیقاً همون مسیری که چیدی");
+caption("نتیجه 👇", "از دید مشتری", "دقیقاً همون مسیری که چیدی، بدون حتی یه خط کد");
 kb(null);
 wait(0.6); typed("/start", 0.6);
 wait(0.5); inc("Please join the channel(s) below to use this bot, then tap \"I've Joined\".", { inline: ["📢 @rose_flowers", "✅ I've Joined"] });
 wait(2.2); tapInline("✅ I've Joined");
 wait(0.4); inc(WELCOME, { inline: ["🌐 سایت ما"] });
 wait(1.8); inc("🛍 یه دسته‌بندی رو انتخاب کن:", { inline: ["دسته‌گل", "گلدان", "📋 همه محصولات"] });
-note("🔒 جوین ← 💬 خوش‌آمد ← 🛍 فروشگاه", 4.4);
-wait(5.0);
+note("🔒 جوین ← 💬 خوش‌آمد ← 🛍 فروشگاه", 3.6);
+wait(4.0);
 
 INTRO_HTML = `<div class="emoji">🎨</div><div class="big">رباتت رو<br>مثل پازل بچین</div><div class="mid">سازنده‌ی بصری ایزی‌میک‌بات<br>بکش، بنداز، وصل کن… تمام 👀</div>`;
 OUTRO_HTML = `<div class="big">سازنده‌ی بصری<br>توی ربات خودت</div><div class="handle">@easymakebot</div><div class="chips"><div>⏱ ۷۲ ساعت رایگان</div><div>🔗 لینک در بیو</div></div>`;

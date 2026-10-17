@@ -101,49 +101,54 @@ const W = 408, H = 588, DPR = 2, FPS = 15;
   const nodeSel = (title) => `.react-flow__node:has(.flow-node-title:has-text("${title}"))`;
   const handle = async (title, side) => center(`${nodeSel(title)} .react-flow__handle-${side}`);
 
+  // Slow, narrated pacing: every action is followed by a pause, and each
+  // distinct action gets its own `seg` so the reel can caption it.
   // 1. The empty canvas and the block strip.
-  seg = 'blocks'; await hold(1.2);
-  await scrollPaletteTo('Broadcast', 2.2); await hold(0.4);
-  await scrollPaletteTo('Guide', 1.2); await hold(0.3);
+  seg = 'canvas'; await hold(2.6);
+  seg = 'blocks'; await scrollPaletteTo('Broadcast', 3.0); await hold(0.8);
+  await scrollPaletteTo('Guide', 1.6); await hold(0.6);
 
   // 2. Trigger (/start).
   seg = 'trigger';
-  await drag(paletteItem('Trigger'), { x: 14, y: 16 }); await hold(0.8);
+  await drag(paletteItem('Trigger'), { x: 14, y: 16 }, 1.4); await hold(2.4);
 
-  // 3. Force Join Gate, connected after the trigger.
+  // 3. Force Join Gate, then the connecting line.
   seg = 'gate';
-  await scrollPaletteTo('Force Join', 0.6);
-  await drag(paletteItem('Force Join'), { x: 214, y: 150 });
-  await drag(`${nodeSel('Trigger')} .react-flow__handle-right`, await handle('Force Join', 'left'), 0.9);
-  await hold(0.6);
+  await scrollPaletteTo('Force Join', 0.8);
+  await drag(paletteItem('Force Join'), { x: 214, y: 150 }, 1.4); await hold(1.4);
+  seg = 'connect';
+  await drag(`${nodeSel('Trigger')} .react-flow__handle-right`, await handle('Force Join', 'left'), 1.6);
+  await hold(2.2);
 
-  // 4. Send Message, written in the composer.
+  // 4. Send Message, connected, then written in the composer.
   seg = 'message';
-  await scrollPaletteTo('Send Message', 0.5);
-  await drag(paletteItem('Send Message'), { x: 14, y: 285 });
-  await drag(`${nodeSel('Force Join')} .react-flow__handle-right`, await handle('Send Message', 'left'), 0.9);
-  await hold(0.4);
+  await scrollPaletteTo('Send Message', 0.7);
+  await drag(paletteItem('Send Message'), { x: 14, y: 285 }, 1.4); await hold(0.8);
+  await drag(`${nodeSel('Force Join')} .react-flow__handle-right`, await handle('Send Message', 'left'), 1.4);
+  await hold(1.4);
   seg = 'composer';
-  await tap(`${nodeSel('Send Message')} .flow-node-manage`); await hold(0.6);
-  await typeInto('.cm-textarea', 'سلام 🌹 به فروشگاه گل رز خوش اومدی!\nدسته‌گل‌های امروز رو ببین 👇', 22);
-  await hold(0.4);
-  await tap('.cm-button:has-text("Add button")'); await hold(0.3);
-  await typeInto('.cm-input[placeholder="Button text"]', '🌐 سایت ما', 15);
-  await typeInto('.cm-input[placeholder="https://…"]', 'https://rose-shop.ir', 20);
-  await tap('.cm-form .cm-button-primary:has-text("Add button")'); await hold(0.6);
-  await tap('.cm-form-actions .cm-button-primary'); await hold(0.6);
+  await tap(`${nodeSel('Send Message')} .flow-node-manage`); await hold(1.6);
+  await typeInto('.cm-textarea', 'سلام 🌹 به فروشگاه گل رز خوش اومدی!\nدسته‌گل‌های امروز رو ببین 👇', 16);
+  await hold(1.2);
+  seg = 'button';
+  await tap('.cm-button:has-text("Add button")'); await hold(0.8);
+  await typeInto('.cm-input[placeholder="Button text"]', '🌐 سایت ما', 12);
+  await typeInto('.cm-input[placeholder="https://…"]', 'https://rose-shop.ir', 18);
+  await tap('.cm-form .cm-button-primary:has-text("Add button")'); await hold(1.4);
+  await tap('.cm-form-actions .cm-button-primary'); await hold(1.4);
 
   // 5. Shop, last in the chain.
   seg = 'shop';
-  await scrollPaletteTo('Shop', 0.6);
-  await drag(paletteItem('Shop'), { x: 214, y: 400 });
-  await drag(`${nodeSel('Send Message')} .react-flow__handle-right`, await handle('Shop', 'left'), 0.9);
-  await hold(0.5);
+  await scrollPaletteTo('Shop', 0.8);
+  await drag(paletteItem('Shop'), { x: 214, y: 400 }, 1.4); await hold(0.8);
+  await drag(`${nodeSel('Send Message')} .react-flow__handle-right`, await handle('Shop', 'left'), 1.4);
+  await hold(1.8);
 
   // 6. Fit the whole flow on screen, then Save.
+  seg = 'fit';
+  await tap('.react-flow__controls-fitview'); await hold(2.0);
   seg = 'save';
-  await tap('.react-flow__controls-fitview'); await hold(0.8);
-  await tap('.save-button'); await hold(2.0);
+  await tap('.save-button'); await hold(2.6);
 
   fs.writeFileSync(path.join(OUT, 'timeline.json'), JSON.stringify({ fps: FPS, width: W * DPR, height: H * DPR, frames }));
   console.log('frames', frames.length, 'seconds', (frames.length / FPS).toFixed(1));
